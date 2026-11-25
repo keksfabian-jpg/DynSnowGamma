@@ -1,0 +1,66 @@
+/**
+ * @ Version: SCREEN SPACE SHADERS 23.5 + DynSnow Weapon Frost & Snow Accumulation
+ * @ Description: 1st-Person Weapon & Hands HUD Shader (Bump)
+ */
+
+#include "common.h"
+#include "sload.h"
+#include "screenspace_hud_raindrops.h"
+#include "check_screenspace.h"
+#include "screenspace_mvectors.h"
+#include "settings_screenspace_PUDDLES.h"
+#include "dynsnow_common.h"
+
+f_deffer main(p_bumped I)
+{
+	f_deffer O;
+
+	float4 drops = 0;
+
+	if (ssfx_hud_drops_1.y > 0)
+	{
+		drops.xyz = ssfx_hud_raindrops(s_hud_rain, I.RDrops.xyz, 1.0f);
+		drops.xyz *= saturate(I.RDrops.w);
+		drops.xyz *= ssfx_hud_drops_1.y;
+		I.tcdh.xy = I.tcdh.xy + drops.xy * ssfx_hud_drops_1.w;
+#ifdef SSFX_SSS
+		drops.w = ssfx_hud_drops_1.z;
+#else
+		drops.w = ssfx_hud_drops_1.z * dot(L_hemi_color, SSFX_HUD_LIGHTVECTOR);
+#endif
+		drops.w = max(drops.w, 3.0f);
+	}
+
+	surface_bumped S = sload(I);
+
+	// Apply dynamic 3D snow & frost accumulation onto weapon barrel, receiver, optic & hands!
+	dynsnow_apply_hud_snow(S.base.xyz, S.normal, S.gloss, I.RDrops);
+
+	float3 Ne = mul(float3x3(I.M1, I.M2, I.M3), S.normal + float3(drops.xy * drops.w, 1.0f));
+	Ne = normalize(Ne);
+
+	float ms = xmaterial;
+	S.gloss += (ssfx_hud_drops_1.y * ssfx_hud_drops_2.z) + drops.z * ssfx_hud_drops_2.w;
+
+#ifdef USE_LM_HEMI
+	float4 lm = s_hemi.Sample(smp_rtlinear, I.lmh);
+	float h = get_hemi(lm);
+# ifdef USE_R2_STATIC_SUN
+	ms = get_sun(lm);
+# endif
+#else
+	float h = I.position.w;
+# ifdef USE_R2_STATIC_SUN
+	ms = I.tcdh.w;
+# endif
+#endif
+
+	O = pack_gbuffer(
+		float4(Ne, h),
+		float4(I.position.xyz + Ne * S.height * def_virtualh, ms),
+		float4(S.base.xyz, S.gloss)
+	);
+
+	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 1, 0);
+	return O;
+}
