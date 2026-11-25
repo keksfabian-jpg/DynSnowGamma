@@ -1,0 +1,40 @@
+-- ==============================================================================================
+-- DynSnow for S.T.A.L.K.E.R. G.A.M.M.A. - MCM Configuration Menu
+-- 100% Original Clean-Room Addon | License: MIT
+-- ==============================================================================================
+
+local defaults = {
+    ["always_snow"]           = true,
+    ["enable_dynsnow"]        = true,
+    ["enable_npc_tracks"]     = true,
+    ["enable_campfire_melt"]  = true,
+    ["campfire_melt_radius"]  = 2.1,
+    ["enable_env_fx"]         = true,
+    ["track_ttl_mult"]        = 1.0,
+}
+
+function get_config(key)
+    if ui_mcm then
+        local val = ui_mcm.get("dynsnow_gamma/" .. key)
+        if val ~= nil then return val end
+    end
+    return defaults[key]
+end
+
+function on_mcm_load()
+    return {
+        id = "dynsnow_gamma", sh = true, gr = {
+            { id = "title", type = "slide", link = "ui_options_slider_player", text = "ui_mcm_dynsnow_gamma_title", size = {512, 50}, spacing = 20 },
+            { id = "always_snow", type = "check", val = 1, def = true },
+            { id = "line1", type = "line" },
+            { id = "enable_dynsnow", type = "check", val = 1, def = true },
+            { id = "enable_npc_tracks", type = "check", val = 1, def = true },
+            { id = "track_ttl_mult", type = "track", val = 2, min = 0.3, max = 3.0, step = 0.1, def = 1.0 },
+            { id = "line2", type = "line" },
+            { id = "enable_campfire_melt", type = "check", val = 1, def = true },
+            { id = "campfire_melt_radius", type = "track", val = 2, min = 1.0, max = 3.5, step = 0.1, def = 2.1 },
+            { id = "line3", type = "line" },
+            { id = "enable_env_fx", type = "check", val = 1, def = true },
+        }
+    }
+end

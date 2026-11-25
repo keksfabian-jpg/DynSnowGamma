@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<string_table>
+    <string id="ui_mcm_menu_dynsnow_gamma">
+        <text>!DynSnow</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_title">
+        <text>DynSnow for G.A.M.M.A.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_always_snow">
+        <text>Always Snowing (100% Outdoor Snowfall)</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_always_snow_desc">
+        <text>Keeps snowfall active at all times outdoors (when Project INVERNO is installed), varying organically between light drifting snow, thick snowflakes, heavy snow, and blizzards without dry clear gaps.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_enable_dynsnow">
+        <text>Enable 3D Snow Footprints &amp; Deformation</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_enable_dynsnow_desc">
+        <text>Leaves directional 3D-shaded left/right bootprints, sprint scuffs, and jump landing craters in snow that gradually fill back in as snow continues to fall.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks">
+        <text>Enable Stalker &amp; Mutant Snow Trails</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks_desc">
+        <text>Nearby stalkers and mutants (within 35m) leave directional boot and species-scaled paw trails in the snow so you can track them across the Zone.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_track_ttl_mult">
+        <text>Snow Track Fill-In Time Multiplier</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_track_ttl_mult_desc">
+        <text>Controls how long footprints and craters stay visible before falling snow buries them (1.0 = ~45s in blizzards up to ~140s in light snow).</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt">
+        <text>Enable Campfire Snow Melting &amp; Re-Snowing</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt_desc">
+        <text>Lit campfires gradually melt surrounding snow into thawed dark earth and wet slush. Once extinguished, fresh snowfall slowly buries the firepit again.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius">
+        <text>Campfire Snow Melt Radius (Meters)</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius_desc">
+        <text>Maximum radius around a burning campfire where snow melts away.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_enable_env_fx">
+        <text>Enable Snow Craters &amp; Tree Snow Shake</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_enable_env_fx_desc">
+        <text>Gunshots and explosions churn craters in snow, kick up snow dust, and shake falling snow cascades loose from tree branches.</text>
+    </string>
+</string_table>
