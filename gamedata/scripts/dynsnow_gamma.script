@@ -517,7 +517,7 @@ local function push_fast_uniforms()
         exec_cached("sp2", "shader_param_2 0.000,0.000,0.00000,0.00000")
         exec_cached("cf1_pos", "r4_hdr10_bloom_blur_scale 0.250000000")
         exec_cached("cf2_pos", "r4_hdr10_bloom_intensity 0.250000000")
-        exec_cached("wpn_snow", "r4_hdr10_sun_intensity 0.0000")
+        exec_cached("wpn_snow", "r4_hdr10_sun_intensity 1.0000")
         return
     end
 
@@ -534,7 +534,7 @@ local function push_fast_uniforms()
     local cf2_r = (cfg_campfire_melt and active_cf2_pos) and active_cf2_r or 0.0
     local cf1_pack = (cf1_r > 0.008 and active_cf1_pos) and pack_cf_mod32(active_cf1_pos.x, active_cf1_pos.z) or 0.25
     local cf2_pack = (cf2_r > 0.008 and active_cf2_pos) and pack_cf_mod32(active_cf2_pos.x, active_cf2_pos.z) or 0.25
-    local wpn_val = cfg_weapon_snow and clamp_val(weapon_snow_amount * cfg_weapon_snow_int, 0.0, 2.0) or 0.0
+    local wpn_val = 1.0 + (cfg_weapon_snow and clamp_val(weapon_snow_amount * cfg_weapon_snow_int, 0.0, 2.0) or 0.0)
 
     exec_cached("sp2", string.format("shader_param_2 1.000,%.3f,%.5f,%.5f", snow_accum, cf1_r, cf2_r))
     exec_cached("cf1_pos", string.format("r4_hdr10_bloom_blur_scale %.9f", cf1_pack))
@@ -945,6 +945,40 @@ function actor_on_update()
     end
 end
 
+local function release_level_pools()
+    for i = 1, MAX_PUFF_POOL do
+        local p = puff_pool[i]
+        if p then
+            pcall(function() if p:playing() then p:stop() end end)
+            puff_pool[i] = nil
+        end
+    end
+    for i = 1, MAX_TREE_POOL do
+        local p = tree_cascade_pool[i]
+        if p then
+            pcall(function() if p:playing() then p:stop() end end)
+            tree_cascade_pool[i] = nil
+        end
+    end
+    puff_pool           = {}
+    tree_cascade_pool   = {}
+    campfire_melt       = {}
+    active_cf1_pos      = nil
+    active_cf1_r        = 0.0
+    active_cf2_pos      = nil
+    active_cf2_r        = 0.0
+    cf_animating_near   = false
+    world_trails        = {}
+    player_live_head    = nil
+    player_was_valid    = false
+    entity_last_pos     = {}
+    entity_next_check_tg = {}
+    entity_outdoor_cache = {}
+    entity_strength_cache = {}
+    entity_chain_active = {}
+    cmd_cache           = {}
+end
+
 function save_state(m_data)
     m_data.dynsnow_campfire_radii = saved_campfire_radii
     m_data.dynsnow_weapon_snow    = weapon_snow_amount
@@ -953,11 +987,15 @@ end
 function load_state(m_data)
     saved_campfire_radii = m_data.dynsnow_campfire_radii or {}
     weapon_snow_amount   = m_data.dynsnow_weapon_snow or 0.65
-    campfire_melt        = {}
-    world_trails         = {}
-    player_live_head     = nil
-    player_was_valid     = false
-    cmd_cache            = {}
+    release_level_pools()
+end
+
+local function actor_on_net_destroy()
+    release_level_pools()
+end
+
+local function on_before_level_changing()
+    release_level_pools()
 end
 
 function on_game_start()
@@ -965,6 +1003,8 @@ function on_game_start()
     RegisterScriptCallback("actor_on_land", actor_on_land)
     RegisterScriptCallback("actor_on_weapon_fired", actor_on_weapon_fired)
     RegisterScriptCallback("actor_on_update", actor_on_update)
+    RegisterScriptCallback("actor_on_net_destroy", actor_on_net_destroy)
+    RegisterScriptCallback("on_before_level_changing", on_before_level_changing)
     RegisterScriptCallback("npc_on_update", npc_on_update)
     RegisterScriptCallback("monster_on_update", monster_on_update)
     RegisterScriptCallback("npc_on_net_destroy", cleanup_entity)

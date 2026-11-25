@@ -9,7 +9,7 @@
  *   shader_param_2.w      = Campfire 2 exact continuous float melt radius (0.000 .. 3.500 m)
  *   hdr10_parameters4.y   = Campfire 1 packed XZ on 32m torus (10-bit X + 10-bit Z = 3.1cm precision)
  *   hdr10_parameters4.z   = Campfire 2 packed XZ on 32m torus (10-bit X + 10-bit Z = 3.1cm precision)
- *   hdr10_parameters4.w   = Continuous weapon frost/snow intensity (0.000 .. 2.000)
+ *   hdr10_parameters4.w   = 1.0 + Continuous weapon frost/snow intensity ([1.000 .. 3.000] in [1..100] range)
  *   25 Contiguous 3D Trail Node Slots (Player + Stalkers + Mutants, 5+ min smooth tail-to-head decay):
  *     Slots  0..3  : hdr10_parameters3.xyzw
  *     Slots  4..7  : hdr10_parameters5.xyzw
@@ -338,7 +338,10 @@ void dynsnow_apply_hud_snow(
 	float3 view_pos,
 	float3 world_bumped_n)
 {
-	float wpn_snow = hdr10_parameters4.w;
+	// Encoded as 1.0 + wpn_snow ([1.000 .. 3.000]); ignore uninitialized HDR10 default (80.0) on frame 0
+	if (hdr10_parameters4.w > 5.0f)
+		return;
+	float wpn_snow = hdr10_parameters4.w - 1.0f;
 	if (wpn_snow <= 0.01f)
 		return;
 
