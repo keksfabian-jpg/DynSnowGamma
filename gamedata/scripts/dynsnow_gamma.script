@@ -3,13 +3,11 @@
 -- Inspired by Garry's Mod dynSnow | 100% Original Clean-Room Implementation | License: MIT
 --
 -- Features:
---   1. Always-Snowing Weather Hook (non-destructive runtime hook for Project INVERNO)
---   2. Directional 3D-shaded Left/Right Bootprints for Player & nearby Stalkers (<= 35m)
---   3. Species-scaled Mutant Paw/Claw Trails in snow (<= 35m)
---   4. Dynamic Snow Fill-In: footprints & craters bury faster in blizzards, slower in light snow
---   5. Campfire Snow Melting & Re-Snowing: lit campfires gradually melt snow into wet dark earth
---      around them; extinguished campfires slowly get covered in snow again!
---   6. Doorway snow tracking, jump/sprint snow puffs, bullet scuffs, explosion craters & tree snow shake
+--   1. Real-Time 3D Parallax Snow Trench & Raised Berm Deformation (shader_param_2 + shader_param_5)
+--   2. Dynamic 3D Weapon & Glove Snow/Frost Accumulation (builds outdoors, shakes on shot, melts by fire)
+--   3. 3D Campfire Snow Melt Pit & Gradual Re-Snowing when extinguished
+--   4. Always-Snowing Weather Hook (100% continuous rich snowflakes/heavy snow/blizzards outdoors)
+--   5. Zero-border 2x-Multiplicative Bootprints, Mutant Paw Trails, Snow Craters & Tree Snow Cascades
 -- ==============================================================================================
 
 local UNDERGROUND_LEVELS = {
@@ -25,26 +23,26 @@ local UNDERGROUND_LEVELS = {
 }
 
 local PAW_SCALE_BY_PATTERN = {
-    tushkan     = 0.10,
-    rat         = 0.08,
-    cat         = 0.15,
-    dog         = 0.17,
-    pseudodog   = 0.19,
-    psydog      = 0.19,
-    karlik      = 0.16,
-    snork       = 0.21,
-    lurker      = 0.23,
-    bloodsucker = 0.23,
-    psysucker   = 0.23,
-    controller  = 0.21,
-    burer       = 0.22,
-    fracture    = 0.24,
-    flesh       = 0.25,
-    boar        = 0.27,
-    chimera     = 0.36,
-    bibliotekar = 0.40,
-    gigant      = 0.48,
-    giant       = 0.48,
+    tushkan     = 0.11,
+    rat         = 0.09,
+    cat         = 0.16,
+    dog         = 0.18,
+    pseudodog   = 0.20,
+    psydog      = 0.20,
+    karlik      = 0.17,
+    snork       = 0.22,
+    lurker      = 0.24,
+    bloodsucker = 0.24,
+    psysucker   = 0.24,
+    controller  = 0.22,
+    burer       = 0.23,
+    fracture    = 0.25,
+    flesh       = 0.26,
+    boar        = 0.28,
+    chimera     = 0.38,
+    bibliotekar = 0.42,
+    gigant      = 0.50,
+    giant       = 0.50,
 }
 
 local VEC_DOWN = vector():set(0, -1, 0)
@@ -52,17 +50,32 @@ local VEC_UP   = vector():set(0, 1, 0)
 
 local cfg_always_snow       = true
 local cfg_enable_dynsnow    = true
+local cfg_weapon_snow       = true
 local cfg_enable_npc_tracks = true
 local cfg_campfire_melt     = true
-local cfg_campfire_max_r    = 2.1
+local cfg_campfire_max_r    = 2.2
 local cfg_enable_env_fx     = true
 local cfg_ttl_mult          = 1.0
 local last_cfg_sync_tg      = 0
 
 local inverno_hooked        = false
 local actor_flip_right      = false
-local actor_boot_snow_steps = 4
 local last_actor_step_tg    = 0
+local last_stride_pos       = nil
+
+-- 3D Trail Node Ring-Buffer: trail_nodes[1] = newest (P0), trail_nodes[4] = oldest (P3)
+local trail_nodes           = {}
+local last_trail_push_pos   = nil
+local last_trail_decay_tg   = 0
+
+-- Weapon Snow accumulation state [0.00 .. 0.92]
+local weapon_snow_amount    = 0.72
+local last_wpn_snow_tg      = 0
+
+-- Shader uniform cache to avoid redundant console calls
+local last_sp2_cmd          = ""
+local last_sp5_cmd          = ""
+local last_shader_push_tg   = 0
 
 local entity_last_pos       = {}
 local entity_next_check_tg  = {}
@@ -70,13 +83,14 @@ local entity_flip_right     = {}
 local entity_outdoor_cache  = {}
 local entity_scale_cache    = {}
 
--- Campfire snow melt state: campfire_melt[id] = { r = current_radius, next_stamp = tg, sky = bool }
+-- Campfire snow melt state
 local campfire_melt         = {}
 local saved_campfire_radii  = {}
+local nearest_cf_pos        = nil
+local nearest_cf_radius     = 0.0
 local last_campfire_tick_tg = 0
 
 local last_shot_fx_tg       = 0
-local last_accum_sync_tg    = 0
 local last_explosion_tg     = 0
 
 local puff_pool             = {}
@@ -87,15 +101,31 @@ local tree_cascade_pool     = {}
 local tree_cascade_idx      = 1
 local MAX_TREE_POOL         = 4
 
+local function clamp_val(x, lo, hi)
+    if x < lo then return lo elseif x > hi then return hi end
+    return x
+end
+
+-- Exact binary-float 28m torus coordinate packer in [0.25 .. 95.25] (0.0 = inactive)
+local function pack_mod28(x, z)
+    if not x or not z then return 0.0 end
+    local mx = x - math.floor(x / 28.0) * 28.0
+    local mz = z - math.floor(z / 28.0) * 28.0
+    local ix = clamp_val(math.floor((mx / 28.0) * 379.0 + 1.5), 1, 380)
+    local iz = clamp_val(math.floor((mz / 28.0) * 511.0 + 0.5), 0, 511)
+    return (ix * 512.0 + iz) / 2048.0
+end
+
 local function sync_mcm(tg)
     if tg < last_cfg_sync_tg + 1500 then return end
     last_cfg_sync_tg = tg
     if dynsnow_gamma_mcm and dynsnow_gamma_mcm.get_config then
         cfg_always_snow       = dynsnow_gamma_mcm.get_config("always_snow") ~= false
+        cfg_weapon_snow       = dynsnow_gamma_mcm.get_config("enable_weapon_snow") ~= false
         cfg_enable_dynsnow    = dynsnow_gamma_mcm.get_config("enable_dynsnow") ~= false
         cfg_enable_npc_tracks = dynsnow_gamma_mcm.get_config("enable_npc_tracks") ~= false
         cfg_campfire_melt     = dynsnow_gamma_mcm.get_config("enable_campfire_melt") ~= false
-        cfg_campfire_max_r    = dynsnow_gamma_mcm.get_config("campfire_melt_radius") or 2.1
+        cfg_campfire_max_r    = dynsnow_gamma_mcm.get_config("campfire_melt_radius") or 2.2
         cfg_enable_env_fx     = dynsnow_gamma_mcm.get_config("enable_env_fx") ~= false
         cfg_ttl_mult          = dynsnow_gamma_mcm.get_config("track_ttl_mult") or 1.0
     end
@@ -135,20 +165,16 @@ local function is_actor_indoors()
     return not has_open_sky(db.actor:position(), db.actor)
 end
 
--- 1. Clean-Room Runtime Hook for 100% Continuous Outdoor Snowfall
+-- 1. Rich 100% Continuous Outdoor Snowfall Hook (Always thick Snowflakes / Heavy Snow / Blizzard!)
 local function pick_snow_state_for_weather()
     local w = string.lower((level.get_weather and level.get_weather()) or "")
     if string.find(w, "storm") then
         return 5 -- Blizzard
-    elseif string.find(w, "rain") then
+    elseif string.find(w, "rain") or string.find(w, "cloudy") then
         return 4 -- Heavy Snow
-    elseif string.find(w, "cloudy") or string.find(w, "foggy") then
-        return 3 -- Snowflakes
     end
-    -- Clear / Partly: alternate organically by game hour between Light Snow (2) and Snowflakes (3)
     local hr = (level.get_time_hours and level.get_time_hours()) or 12
-    local mod = hr % 4
-    if mod == 0 then return 2 elseif mod == 3 then return 4 else return 3 end
+    return (hr % 3 == 0) and 4 or 3 -- Rich Snowflakes (3) or Heavy Snow (4), never sparse 2!
 end
 
 local function ensure_inverno_always_snow_hook()
@@ -163,10 +189,10 @@ local function ensure_inverno_always_snow_hook()
             if cfg_always_snow and not inv.is_manual_weather then
                 if inv.CONFIG then inv.CONFIG.SNOW_CHANCE_PERCENT = 100 end
                 local st = inv.target_weather_state or 1
-                if st <= 1 or st == 6 or st == 7 then
+                if st <= 2 or st == 6 or st == 7 then
                     local desired = pick_snow_state_for_weather()
                     inv.target_weather_state = desired
-                    if (inv.current_weather_state or 1) <= 1.2 then
+                    if (inv.current_weather_state or 1) < 2.8 then
                         inv.current_weather_state = desired
                     end
                 end
@@ -176,7 +202,7 @@ local function ensure_inverno_always_snow_hook()
 
     if cfg_always_snow and not inv.is_manual_weather then
         local st = inv.target_weather_state or 1
-        if st <= 1 or st == 6 or st == 7 then
+        if st <= 2 or st == 6 or st == 7 then
             local desired = pick_snow_state_for_weather()
             inv.target_weather_state  = desired
             inv.current_weather_state = desired
@@ -184,19 +210,12 @@ local function ensure_inverno_always_snow_hook()
     end
 end
 
--- Dynamic footprint fill-in time based on snowfall intensity
 local function get_dynamic_ttl(extra_mult)
     local w_state = get_snowfall_state()
     local base_ttl = 95.0
-    if w_state >= 4.5 then
-        base_ttl = 45.0
-    elseif w_state >= 3.5 then
-        base_ttl = 65.0
-    elseif w_state >= 2.5 then
-        base_ttl = 95.0
-    else
-        base_ttl = 140.0
-    end
+    if w_state >= 4.5 then base_ttl = 45.0
+    elseif w_state >= 3.5 then base_ttl = 65.0
+    else base_ttl = 105.0 end
     return math.max(15.0, base_ttl * cfg_ttl_mult * (extra_mult or 1.0))
 end
 
@@ -209,18 +228,17 @@ end
 local function place_snow_decal(pos, size, section, ignore_obj, ttl, rot_deg, trace_up, trace_len)
     local wm = wallmarks_manager and wallmarks_manager()
     if not wm then return end
-    local up = trace_up or 0.55
-    local len = trace_len or 1.65
+    local up = trace_up or 1.10
+    local len = trace_len or 2.80
     local start_pos = vector():set(pos.x, pos.y + up, pos.z)
     wm:place(VEC_DOWN, start_pos, len, size, section, ignore_obj, ttl, rot_deg or 0.0)
 end
 
--- Check if a world position lies inside a campfire's melted snow circle
 local function is_inside_melted_campfire_zone(pos)
     if not cfg_campfire_melt then return false end
     for _, st in pairs(campfire_melt) do
         if st.r and st.r > 0.35 and st.pos then
-            local eff_r = st.r * 0.88
+            local eff_r = st.r * 0.90
             if pos:distance_to_sqr(st.pos) <= (eff_r * eff_r) then
                 return true
             end
@@ -229,49 +247,40 @@ local function is_inside_melted_campfire_zone(pos)
     return false
 end
 
--- 2. Campfire Snow Melting & Gradual Re-Snowing
+-- 2. Campfire 3D Snow Melting & Re-Snowing
 local function is_campfire_lit(binder)
     if not binder or not binder.campfire or not binder.object then return false end
     local burning = false
-    if binder.campfire.is_on and binder.campfire:is_on() then
-        burning = true
-    end
-    if binder.object.is_campfire_burning and not binder.object:is_campfire_burning() then
-        burning = false
-    end
+    if binder.campfire.is_on and binder.campfire:is_on() then burning = true end
+    if binder.object.is_campfire_burning and not binder.object:is_campfire_burning() then burning = false end
     return burning
 end
 
 local function update_campfire_snow_melt(tg)
-    if tg < last_campfire_tick_tg + 2000 then return end
+    if tg < last_campfire_tick_tg + 1500 then return end
     last_campfire_tick_tg = tg
+    nearest_cf_pos = nil
+    nearest_cf_radius = 0.0
+
     if not cfg_campfire_melt or is_underground_level() or not db.actor then return end
     if not bind_campfire or not bind_campfire.campfires_all then return end
 
     local cam_pos = device().cam_pos
     local w_state = get_snowfall_state()
-    -- Faster snow burial in heavy snow/blizzards when campfire is out!
-    local resnow_step = 0.045
-    if w_state >= 4.5 then
-        resnow_step = 0.110
-    elseif w_state >= 3.5 then
-        resnow_step = 0.080
-    elseif w_state >= 2.5 then
-        resnow_step = 0.055
-    end
-    local melt_step = 0.12
+    local resnow_step = (w_state >= 4.5) and 0.095 or ((w_state >= 3.5) and 0.068 or 0.045)
+    local melt_step = 0.11
+    local best_dist_sqr = 999999.0
 
     for id, binder in pairs(bind_campfire.campfires_all) do
         if binder and binder.object then
             local cf_pos = binder.object:position()
             local dist_sqr = cf_pos:distance_to_sqr(cam_pos)
-            if dist_sqr <= 3600.0 then -- 60m active range
+            if dist_sqr <= 3600.0 then
                 local lit = is_campfire_lit(binder)
                 local st = campfire_melt[id]
                 if not st then
                     local saved_r = saved_campfire_radii[id]
-                    -- Pre-lit distant campfires start already thawed; freshly lit nearby ones melt outward!
-                    local init_r = saved_r or ((lit and dist_sqr > 169.0) and cfg_campfire_max_r or (lit and 0.45 or 0.0))
+                    local init_r = saved_r or ((lit and dist_sqr > 169.0) and cfg_campfire_max_r or (lit and 0.50 or 0.0))
                     st = {
                         r = init_r,
                         pos = vector():set(cf_pos),
@@ -285,21 +294,89 @@ local function update_campfire_snow_melt(tg)
 
                 if st.sky then
                     if lit then
-                        if st.r < 0.40 then st.r = 0.45 end
+                        if st.r < 0.45 then st.r = 0.50 end
                         st.r = math.min(cfg_campfire_max_r, st.r + melt_step)
                     elseif st.r > 0.0 then
                         st.r = math.max(0.0, st.r - resnow_step)
                     end
                     saved_campfire_radii[id] = (st.r > 0.05) and st.r or nil
 
-                    if st.r >= 0.32 and tg >= st.next_stamp then
+                    if st.r >= 0.30 and dist_sqr < best_dist_sqr then
+                        best_dist_sqr = dist_sqr
+                        nearest_cf_pos = st.pos
+                        nearest_cf_radius = st.r
+                    end
+
+                    -- Also place multiplicative soil decal for static camp meshes/stones
+                    if st.r >= 0.35 and tg >= st.next_stamp then
                         st.next_stamp = tg + 3400
-                        local fixed_rot = (id * 53) % 360
-                        place_snow_decal(cf_pos, st.r, "dynsnow_melt", binder.object, 5.2, fixed_rot, 0.85, 2.2)
+                        place_snow_decal(cf_pos, st.r, "dynsnow_melt", binder.object, 5.0, (id * 53) % 360, 1.1, 2.6)
                     end
                 end
             end
         end
+    end
+end
+
+-- 3. Push 3D Trail Nodes, Campfire Pit & Weapon Snow into HLSL Uniforms
+local function push_dynsnow_shader_uniforms(tg, force_now)
+    if not force_now and tg < last_shader_push_tg + 160 then return end
+    last_shader_push_tg = tg
+    if not get_console then return end
+
+    if is_underground_level() then
+        local zero2 = "shader_param_2 0.000,0.000,0.000,0.000"
+        local zero5 = "shader_param_5 0.000,0.000,0.000,0.000"
+        if zero2 ~= last_sp2_cmd then last_sp2_cmd = zero2 get_console():execute(zero2) end
+        if zero5 ~= last_sp5_cmd then last_sp5_cmd = zero5 get_console():execute(zero5) end
+        return
+    end
+
+    local w_state = get_snowfall_state()
+    local snow_accum = (w_state >= 4.5) and 1.00 or ((w_state >= 3.5) and 0.94 or 0.88)
+    if _G.inverno_freezing_mechanic then
+        _G.inverno_freezing_mechanic.ground_freeze_factor = 1.0
+        _G.inverno_freezing_mechanic.snow_accumulation_factor = snow_accum
+        _G.inverno_freezing_mechanic.last_sent_freeze = 1.0
+        _G.inverno_freezing_mechanic.last_sent_snow = snow_accum
+    end
+
+    local p0 = (cfg_enable_dynsnow and trail_nodes[1]) and pack_mod28(trail_nodes[1].x, trail_nodes[1].z) or 0.0
+    local p1 = (cfg_enable_dynsnow and trail_nodes[2]) and pack_mod28(trail_nodes[2].x, trail_nodes[2].z) or 0.0
+    local p2 = (cfg_enable_dynsnow and trail_nodes[3]) and pack_mod28(trail_nodes[3].x, trail_nodes[3].z) or 0.0
+    local p3 = (cfg_enable_dynsnow and trail_nodes[4]) and pack_mod28(trail_nodes[4].x, trail_nodes[4].z) or 0.0
+
+    local cf_pack = (cfg_campfire_melt and nearest_cf_pos and nearest_cf_radius >= 0.30)
+        and pack_mod28(nearest_cf_pos.x, nearest_cf_pos.z) or 0.0
+    local cf_r_int = (cf_pack > 0.0) and clamp_val(math.floor(nearest_cf_radius * 10.0 + 0.5), 0, 35) or 0
+    local wpn_s = cfg_weapon_snow and clamp_val(weapon_snow_amount, 0.0, 0.94) or 0.0
+    local combined_w = cf_r_int + wpn_s
+
+    local cmd2 = string.format("shader_param_2 1.000,%.3f,%.7f,%.4f", snow_accum, p0, combined_w)
+    local cmd5 = string.format("shader_param_5 %.7f,%.7f,%.7f,%.7f", p1, p2, p3, cf_pack)
+
+    if cmd2 ~= last_sp2_cmd then
+        last_sp2_cmd = cmd2
+        get_console():execute(cmd2)
+    end
+    if cmd5 ~= last_sp5_cmd then
+        last_sp5_cmd = cmd5
+        get_console():execute(cmd5)
+    end
+end
+
+local function record_player_trail_node(pos, tg)
+    if not cfg_enable_dynsnow or is_underground_level() then return end
+    if is_actor_indoors() or is_inside_melted_campfire_zone(pos) then return end
+
+    if not last_trail_push_pos or pos:distance_to_sqr(last_trail_push_pos) >= 0.38 then
+        last_trail_push_pos = vector():set(pos)
+        table.insert(trail_nodes, 1, { x = pos.x, z = pos.z })
+        while #trail_nodes > 4 do
+            table.remove(trail_nodes)
+        end
+        last_trail_decay_tg = tg
+        push_dynsnow_shader_uniforms(tg, true)
     end
 end
 
@@ -309,13 +386,7 @@ local function play_snow_puff(pos)
     local p = puff_pool[puff_idx]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_dust") end)
-        if not ok or not obj then
-            ok, obj = pcall(function() return particles_object("hit_fx\\hit_concrete_01") end)
-        end
-        if ok and obj then
-            p = obj
-            puff_pool[puff_idx] = p
-        end
+        if ok and obj then p = obj puff_pool[puff_idx] = p end
     end
     puff_idx = (puff_idx % MAX_PUFF_POOL) + 1
     if p then
@@ -334,16 +405,12 @@ local function play_tree_snow_cascade(pos)
     local p = tree_cascade_pool[tree_cascade_idx]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_heavy") end)
-        if ok and obj then
-            p = obj
-            tree_cascade_pool[tree_cascade_idx] = p
-        end
+        if ok and obj then p = obj tree_cascade_pool[tree_cascade_idx] = p end
     end
     tree_cascade_idx = (tree_cascade_idx % MAX_TREE_POOL) + 1
     if p then
         if p:playing() then p:stop() end
-        local drop_pos = vector():set(pos.x, pos.y - 0.35, pos.z)
-        p:play_at_pos(drop_pos)
+        p:play_at_pos(vector():set(pos.x, pos.y - 0.35, pos.z))
         local stop_id = "dynsnow_tree_" .. tostring(tree_cascade_idx)
         CreateTimeEvent("dynsnow_fx", stop_id, 1.75, function()
             if p and p:playing() then p:stop() end
@@ -353,30 +420,18 @@ local function play_tree_snow_cascade(pos)
     play_snow_puff(pos)
 end
 
--- 3. Player Footsteps
-function actor_on_footstep(mat, power, hud_view, flags)
-    local tg = time_global()
-    sync_mcm(tg)
+-- 4. Player Footsteps (Outdoors Only — Clean Indoor Wooden Floors!)
+local function do_player_snow_step(tg)
     if not cfg_enable_dynsnow or not db.actor or is_underground_level() then return end
-    if tg < last_actor_step_tg + 140 then return end
-    last_actor_step_tg = tg
-
-    if type(mat) == "string" then
-        local m = string.lower(mat)
-        if string.find(m, "water") or string.find(m, "actor") then return end
-    end
+    if tg < last_actor_step_tg + 160 then return end
 
     local actor = db.actor
     local actor_pos = actor:position()
-    if is_inside_melted_campfire_zone(actor_pos) then return end
+    if is_actor_indoors() or is_inside_melted_campfire_zone(actor_pos) then return end
 
-    local inside = is_actor_indoors()
-    if not inside then
-        actor_boot_snow_steps = 4
-    else
-        if actor_boot_snow_steps <= 0 then return end
-        actor_boot_snow_steps = actor_boot_snow_steps - 1
-    end
+    last_actor_step_tg = tg
+    last_stride_pos = vector():set(actor_pos)
+    record_player_trail_node(actor_pos, tg)
 
     actor_flip_right = not actor_flip_right
 
@@ -385,26 +440,34 @@ function actor_on_footstep(mat, power, hud_view, flags)
     if flat_dir:magnitude() < 0.01 then flat_dir:set(0, 0, 1) else flat_dir:normalize() end
 
     local side_dir = vector():set(flat_dir.z, 0, -flat_dir.x)
-    local lat_offset = actor_flip_right and 0.125 or -0.125
-    local step_pos = vector():set(actor_pos):mad(side_dir, lat_offset):mad(flat_dir, 0.06)
+    local lat_offset = actor_flip_right and 0.13 or -0.13
+    local step_pos = vector():set(actor_pos):mad(side_dir, lat_offset):mad(flat_dir, 0.05)
 
     local move_state = level.actor_moving_state and level.actor_moving_state() or 0
     local is_sprint = (bit_and and bit_and(move_state, 4096) ~= 0) or false
 
-    local boot_size = is_sprint and 0.21 or 0.185
-    if inside then boot_size = boot_size * 0.85 end
+    local boot_size = is_sprint and 0.24 or 0.21
     local rot = dir_to_wallmark_rot(flat_dir)
     local sec = actor_flip_right and "dynsnow_boot_r" or "dynsnow_boot_l"
-    local ttl = get_dynamic_ttl(inside and 0.45 or 1.0)
 
-    place_snow_decal(step_pos, boot_size, sec, actor, ttl, rot)
+    place_snow_decal(step_pos, boot_size, sec, actor, get_dynamic_ttl(1.0), rot)
 
-    if is_sprint and not inside then
+    if is_sprint then
         play_snow_puff(step_pos)
     end
 end
 
--- 4. Jump Landing
+function actor_on_footstep(mat, power, hud_view, flags)
+    local tg = time_global()
+    sync_mcm(tg)
+    if type(mat) == "string" then
+        local m = string.lower(mat)
+        if string.find(m, "water") or string.find(m, "actor") then return end
+    end
+    do_player_snow_step(tg)
+end
+
+-- 5. Jump Landing
 function actor_on_land(landing_speed)
     local tg = time_global()
     sync_mcm(tg)
@@ -415,6 +478,8 @@ function actor_on_land(landing_speed)
     local pos = actor:position()
     if is_inside_melted_campfire_zone(pos) then return end
 
+    record_player_trail_node(pos, tg)
+
     local cam_dir = device().cam_dir
     local flat_dir = vector():set(cam_dir.x, 0, cam_dir.z)
     if flat_dir:magnitude() < 0.01 then flat_dir:set(0, 0, 1) else flat_dir:normalize() end
@@ -422,13 +487,13 @@ function actor_on_land(landing_speed)
     local rot = dir_to_wallmark_rot(flat_dir)
     local ttl = get_dynamic_ttl(1.15)
 
-    place_snow_decal(pos, 0.34, "dynsnow_crater", actor, ttl, math.random(0, 359))
-    place_snow_decal(vector():set(pos):mad(side_dir, -0.14), 0.20, "dynsnow_boot_l", actor, ttl, rot)
-    place_snow_decal(vector():set(pos):mad(side_dir, 0.14), 0.20, "dynsnow_boot_r", actor, ttl, rot)
+    place_snow_decal(pos, 0.38, "dynsnow_crater", actor, ttl, math.random(0, 359))
+    place_snow_decal(vector():set(pos):mad(side_dir, -0.14), 0.22, "dynsnow_boot_l", actor, ttl, rot)
+    place_snow_decal(vector():set(pos):mad(side_dir, 0.14), 0.22, "dynsnow_boot_r", actor, ttl, rot)
     play_snow_puff(pos)
 end
 
--- 5. Stalker & Mutant Snow Trails (<= 35m)
+-- 6. Stalker & Mutant Snow Trails (<= 35m)
 local function get_mutant_paw_size(obj)
     local id = obj:id()
     if entity_scale_cache[id] ~= nil then return entity_scale_cache[id] end
@@ -437,12 +502,9 @@ local function get_mutant_paw_size(obj)
         entity_scale_cache[id] = 0
         return 0
     end
-    local sz = 0.20
+    local sz = 0.22
     for pat, val in pairs(PAW_SCALE_BY_PATTERN) do
-        if string.find(sec, pat) then
-            sz = val
-            break
-        end
+        if string.find(sec, pat) then sz = val break end
     end
     entity_scale_cache[id] = sz
     return sz
@@ -470,8 +532,7 @@ local function process_entity_step(obj, is_monster)
     local dz = pos.z - prev.z
     local dy = math.abs(pos.y - prev.y)
     local horiz_sqr = dx * dx + dz * dz
-    local stride_sqr = is_monster and 0.68 or 0.54
-    if horiz_sqr < stride_sqr or dy > 1.2 then return end
+    if horiz_sqr < (is_monster and 0.68 or 0.54) or dy > 1.2 then return end
 
     local move_dir = vector():set(dx, 0, dz):normalize()
     entity_last_pos[id] = vector():set(pos)
@@ -499,33 +560,34 @@ local function process_entity_step(obj, is_monster)
     else
         local bone_name = is_right and "bip01_r_foot" or "bip01_l_foot"
         local foot_pos = (utils_obj and utils_obj.safe_bone_pos and utils_obj.safe_bone_pos(obj, bone_name)) or pos
-        local sec = is_right and "dynsnow_boot_r" or "dynsnow_boot_l"
-        place_snow_decal(foot_pos, 0.18, sec, obj, ttl, rot)
+        place_snow_decal(foot_pos, 0.20, is_right and "dynsnow_boot_r" or "dynsnow_boot_l", obj, ttl, rot)
     end
 end
 
-function npc_on_update(npc)
-    process_entity_step(npc, false)
-end
-
-function monster_on_update(mob)
-    process_entity_step(mob, true)
-end
+function npc_on_update(npc) process_entity_step(npc, false) end
+function monster_on_update(mob) process_entity_step(mob, true) end
 
 local function cleanup_entity(obj)
     if not obj then return end
     local id = obj:id()
-    entity_last_pos[id]      = nil
+    entity_last_pos[id] = nil
     entity_next_check_tg[id] = nil
-    entity_flip_right[id]    = nil
+    entity_flip_right[id] = nil
     entity_outdoor_cache[id] = nil
-    entity_scale_cache[id]   = nil
+    entity_scale_cache[id] = nil
 end
 
--- 6. Gunshots, Tree Snow Cascades & Explosion Craters
+-- 7. Gunshots: Recoil Weapon-Snow Shake, Snow Ground Craters & Tree Snow Cascades
 function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_type, gl_type)
     local tg = time_global()
     sync_mcm(tg)
+
+    -- Gunfire recoil & barrel heat shakes/melts a bit of settled snow off the weapon!
+    if cfg_weapon_snow and weapon_snow_amount > 0.12 then
+        weapon_snow_amount = math.max(0.12, weapon_snow_amount - 0.07)
+        push_dynsnow_shader_uniforms(tg, true)
+    end
+
     if not cfg_enable_dynsnow or not cfg_enable_env_fx or is_underground_level() then return end
     if tg < last_shot_fx_tg + 95 then return end
     last_shot_fx_tg = tg
@@ -549,7 +611,7 @@ function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_typ
 
     if cam_dir.y < -0.10 and hit_pos.y <= cam_pos.y + 0.5 then
         if not is_inside_melted_campfire_zone(hit_pos) and has_open_sky(hit_pos, db.actor) then
-            place_snow_decal(hit_pos, 0.17, "dynsnow_crater", db.actor, get_dynamic_ttl(0.75), math.random(0, 359))
+            place_snow_decal(hit_pos, 0.20, "dynsnow_crater", db.actor, get_dynamic_ttl(0.75), math.random(0, 359))
             play_snow_puff(hit_pos)
         end
     elseif db.actor and hit_pos.y > (db.actor:position().y + 2.1) and cam_dir.y > 0.04 then
@@ -560,65 +622,97 @@ function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_typ
     end
 end
 
+-- 8. Crash-Safe Explosion Snow Craters (separate Actor vs NPC/Monster callback signatures!)
 local function spawn_explosion_snow_crater(pos)
+    if not pos then return end
     local tg = time_global()
     if tg < last_explosion_tg + 250 then return end
     last_explosion_tg = tg
     if not cfg_enable_dynsnow or not cfg_enable_env_fx or is_underground_level() then return end
     if not has_open_sky(pos, db.actor) then return end
 
-    local ttl = get_dynamic_ttl(1.6)
-    place_snow_decal(pos, 1.35, "dynsnow_crater", db.actor, ttl, math.random(0, 359))
+    place_snow_decal(pos, 1.45, "dynsnow_crater", db.actor, get_dynamic_ttl(1.6), math.random(0, 359))
     play_snow_puff(vector():set(pos.x, pos.y + 0.3, pos.z))
     play_tree_snow_cascade(vector():set(pos.x, pos.y + 3.2, pos.z))
 end
 
-local function on_any_before_hit(victim, shit, bone_id, flags)
-    if shit and victim and shit.type == hit.explosion then
+-- npc_on_before_hit / monster_on_before_hit: (victim, s_hit, bone_id, flags)
+local function entity_on_before_hit(victim, s_hit, bone_id, flags)
+    if not victim or type(s_hit) ~= "userdata" then return end
+    local ok, is_expl = pcall(function() return s_hit.type == hit.explosion end)
+    if ok and is_expl then
         spawn_explosion_snow_crater(victim:position())
     end
 end
 
--- 7. Main Update: Always-Snow Hook, Campfire Melt & Snow Accumulation Sync
+-- actor_on_before_hit: (s_hit, bone_id, flags) -> 1st arg is SHit!
+local function actor_on_before_hit_safe(s_hit, bone_id, flags)
+    if not db.actor or type(s_hit) ~= "userdata" then return end
+    local ok, is_expl = pcall(function() return s_hit.type == hit.explosion end)
+    if ok and is_expl then
+        spawn_explosion_snow_crater(db.actor:position())
+    end
+end
+
+-- 9. Main Update: Weapon Snow Buildup/Melt, Stride Fallback, Trail Re-Snowing & Shader Sync
 function actor_on_update()
     local tg = time_global()
     sync_mcm(tg)
     ensure_inverno_always_snow_hook()
     update_campfire_snow_melt(tg)
 
-    if tg < last_accum_sync_tg + 1000 then return end
-    last_accum_sync_tg = tg
+    if db.actor and db.actor:alive() and not is_underground_level() then
+        local apos = db.actor:position()
 
-    if is_underground_level() then return end
+        -- Stride fallback so every 0.72m outdoor movement guarantees a 3D furrow + bootprint
+        if not last_stride_pos or apos:distance_to_sqr(last_stride_pos) >= 0.52 then
+            do_player_snow_step(tg)
+        end
 
-    if _G.inverno_freezing_mechanic then
-        local w_state = get_snowfall_state()
-        local target_accum = 0.80
-        if w_state >= 4.5 then target_accum = 1.00
-        elseif w_state >= 3.5 then target_accum = 0.92
-        elseif w_state >= 2.5 then target_accum = 0.84
-        else target_accum = 0.76 end
+        -- Gradually snow over old 3D trail nodes when standing still (~15s per segment)
+        if #trail_nodes > 0 and tg > last_trail_decay_tg + 14000 then
+            last_trail_decay_tg = tg
+            table.remove(trail_nodes)
+        end
 
-        _G.inverno_freezing_mechanic.ground_freeze_factor = 1.0
-        local cur = _G.inverno_freezing_mechanic.snow_accumulation_factor or 0.0
-        if cur < 0.72 then
-            _G.inverno_freezing_mechanic.snow_accumulation_factor = target_accum
-            if get_console then
-                get_console():execute(string.format("shader_param_2 1.000,%.3f,0,0", target_accum))
+        -- Dynamic Weapon & Glove Snow buildup outdoors vs melting indoors/near lit campfires
+        if tg > last_wpn_snow_tg + 500 then
+            last_wpn_snow_tg = tg
+            local inside = is_actor_indoors()
+            local near_warm_fire = (nearest_cf_pos and nearest_cf_radius > 0.8 and apos:distance_to_sqr(nearest_cf_pos) <= 9.0)
+            if not cfg_weapon_snow then
+                weapon_snow_amount = 0.0
+            elseif inside or near_warm_fire then
+                local melt_rate = near_warm_fire and 0.045 or 0.022
+                weapon_snow_amount = math.max(0.0, weapon_snow_amount - melt_rate)
+            else
+                local w_state = get_snowfall_state()
+                local target_wpn = (w_state >= 4.5) and 0.92 or ((w_state >= 3.5) and 0.84 or 0.74)
+                local build_rate = (w_state >= 4.0) and 0.025 or 0.015
+                if weapon_snow_amount < target_wpn then
+                    weapon_snow_amount = math.min(target_wpn, weapon_snow_amount + build_rate)
+                else
+                    weapon_snow_amount = math.max(target_wpn, weapon_snow_amount - 0.01)
+                end
             end
-        else
-            _G.inverno_freezing_mechanic.snow_accumulation_factor = cur + (target_accum - cur) * 0.08
         end
     end
+
+    push_dynsnow_shader_uniforms(tg, false)
 end
 
 function save_state(m_data)
     m_data.dynsnow_campfire_radii = saved_campfire_radii
+    m_data.dynsnow_weapon_snow    = weapon_snow_amount
 end
 
 function load_state(m_data)
     saved_campfire_radii = m_data.dynsnow_campfire_radii or {}
-    campfire_melt = {}
+    weapon_snow_amount   = m_data.dynsnow_weapon_snow or 0.72
+    campfire_melt        = {}
+    trail_nodes          = {}
+    last_sp2_cmd         = ""
+    last_sp5_cmd         = ""
 end
 
 function on_game_start()
@@ -630,9 +724,9 @@ function on_game_start()
     RegisterScriptCallback("monster_on_update", monster_on_update)
     RegisterScriptCallback("npc_on_net_destroy", cleanup_entity)
     RegisterScriptCallback("monster_on_net_destroy", cleanup_entity)
-    RegisterScriptCallback("npc_on_before_hit", on_any_before_hit)
-    RegisterScriptCallback("monster_on_before_hit", on_any_before_hit)
-    RegisterScriptCallback("actor_on_before_hit", on_any_before_hit)
+    RegisterScriptCallback("npc_on_before_hit", entity_on_before_hit)
+    RegisterScriptCallback("monster_on_before_hit", entity_on_before_hit)
+    RegisterScriptCallback("actor_on_before_hit", actor_on_before_hit_safe)
     RegisterScriptCallback("save_state", save_state)
     RegisterScriptCallback("load_state", load_state)
 end

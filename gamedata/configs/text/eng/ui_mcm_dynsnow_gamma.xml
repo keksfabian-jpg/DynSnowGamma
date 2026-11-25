@@ -11,14 +11,21 @@
         <text>Always Snowing (100% Outdoor Snowfall)</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_always_snow_desc">
-        <text>Keeps snowfall active at all times outdoors (when Project INVERNO is installed), varying organically between light drifting snow, thick snowflakes, heavy snow, and blizzards without dry clear gaps.</text>
+        <text>Keeps rich snowfall active at all times outdoors (when Project INVERNO is installed), cycling smoothly between thick snowflakes, heavy snow, and blizzards without dry clear gaps.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_enable_weapon_snow">
+        <text>Enable Dynamic Snow &amp; Frost on Weapons</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_enable_weapon_snow_desc">
+        <text>Accumulates realistic 3D frost and snow crystals on upward-facing surfaces of your weapon and gloves outdoors, shaking slightly on recoil and melting indoors or near campfires.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow">
-        <text>Enable 3D Snow Footprints &amp; Deformation</text>
+        <text>Enable 3D Snow Trench Deformation &amp; Footprints</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow_desc">
-        <text>Leaves directional 3D-shaded left/right bootprints, sprint scuffs, and jump landing craters in snow that gradually fill back in as snow continues to fall.</text>
+        <text>Carves real-time 3D parallax snow trenches with raised side berms and directional bootprints that gradually fill back in as snow continues to fall.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks">
@@ -36,17 +43,17 @@
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt">
-        <text>Enable Campfire Snow Melting &amp; Re-Snowing</text>
+        <text>Enable 3D Campfire Snow Melting &amp; Re-Snowing</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt_desc">
-        <text>Lit campfires gradually melt surrounding snow into thawed dark earth and wet slush. Once extinguished, fresh snowfall slowly buries the firepit again.</text>
+        <text>Lit campfires gradually melt surrounding 3D snow into dark wet earth and glistening slush. Once extinguished, fresh snowfall slowly buries the firepit again.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius">
         <text>Campfire Snow Melt Radius (Meters)</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius_desc">
-        <text>Maximum radius around a burning campfire where snow melts away.</text>
+        <text>Maximum radius around a burning campfire where 3D snow melts away.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_env_fx">
