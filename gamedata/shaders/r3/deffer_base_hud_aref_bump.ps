@@ -69,7 +69,9 @@ f_deffer main(p_bumped I)
 		drops.w = max(drops.w, 3.0f);
 	}
 
-	dynsnow_apply_hud_snow(S.base.xyz, S.normal, S.gloss, I.RDrops);
+	float3 Ne_base = normalize(mul(float3x3(I.M1, I.M2, I.M3), S.normal));
+	float3 Nw_hud = normalize(mul((float3x3)m_inv_V, Ne_base));
+	dynsnow_apply_hud_snow(S.base.xyz, S.normal, S.gloss, S.height, I.tcdh.xy, I.RDrops, I.position.xyz, Nw_hud);
 
 	float3 Ne = mul(float3x3(I.M1, I.M2, I.M3), S.normal + float3(drops.xy * drops.w, 1.0f));
 	Ne = normalize(Ne);

@@ -1,0 +1,36 @@
+// [ SETTINGS ] (Project INVERNO + DynSnow Deep Volumetric Winter Preset)
+
+uniform float4 shader_param_2; // x = ground_freeze_factor, y = snow_accumulation, z = trail_node_0, w = cf_radius + weapon_snow
+
+#define G_PUDDLES_ALLWAYS
+#define G_PUDDLES_ENABLED					1.0f
+#define G_PUDDLES_GLOBAL_SIZE				1.0f
+#define G_PUDDLES_SIZE						1.05f
+#define G_PUDDLES_BORDER_HARDNESS			0.82f
+#define G_PUDDLES_TERRAIN_EXTRA_WETNESS		0.12f
+#define G_PUDDLES_REFLECTIVITY				0.28f
+#define G_PUDDLES_WATER_REFLECTIVITY		0.68f
+#define G_PUDDLES_TINT						float3(0.74f, 0.83f, 0.94f)
+#define G_PUDDLES_WATER_TINT				float3(0.65f, 0.62f, 0.58f)
+
+#define G_PUDDLES_FROZEN
+#define G_PUDDLES_ICE_ROUGHNESS				0.48f
+#define G_PUDDLES_FROST_EDGE				0.85f
+#define G_PUDDLES_CRACKS_INTENSITY			0.80f
+
+#define G_PUDDLES_RIPPLES
+#define G_PUDDLES_RIPPLES_SCALE				0.75f
+#define G_PUDDLES_RIPPLES_INTENSITY			1.0f
+#define G_PUDDLES_RIPPLES_RAINING_INT		1.0f
+#define G_PUDDLES_RIPPLES_SPEED				1.0f
+
+#define G_PUDDLES_RAIN_RIPPLES_INTENSITY	1.0f
+#define G_PUDDLES_RAIN_RIPPLES_SCALE		1.0f
+#define G_PUDDLES_REFRACTION_INTENSITY		1.0f
+
+#define G_TERRAIN_SNOW_STRENGTH				1.25f
+#define G_ROOF_SNOW_STRENGTH				0.82f
+#define G_TERRAIN_SNOW_SLOPE				0.38f
+#define G_TERRAIN_SNOW_COLOR				float3(0.93f, 0.96f, 1.00f)
+#define G_TERRAIN_SNOW_GLOSS				0.06f
+#define G_TERRAIN_SNOW_BUMP					2.25f

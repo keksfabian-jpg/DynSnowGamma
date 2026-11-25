@@ -1,0 +1,339 @@
+/**
+ * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.2 3D Volumetric Deformation
+ * @ Description: Terrain Shader - HIGH (24cm 3D Raymarched Snow Blanket, Multi-Actor 5-Min 3D Trenches & Smooth Campfire Melt)
+ */
+
+#define USE_TDETAIL
+#include "common.h"
+#include "check_screenspace.h"
+#include "screenspace_mvectors.h"
+#include "settings_screenspace_PUDDLES.h"
+#include "screenspace_common_ripples.h"
+#include "settings_screenspace_TERRAIN.h"
+#include "dynsnow_common.h"
+
+#ifdef SSFX_PUDDLES
+	Texture2D s_puddles_normal;
+	Texture2D s_puddles_mask;
+	Texture2D s_rainsplash;
+#endif
+
+Texture2D s_height_r;
+Texture2D s_height_g;
+Texture2D s_height_b;
+Texture2D s_height_a;
+
+uniform float4 ssfx_terrain_pom;
+uniform float4 ssfx_terrain_offset;
+
+struct surface
+{
+	float4 base;
+	float4 normal;
+	float gloss;
+	float mask;
+	float height;
+	float AO;
+	float2 tc;
+};
+
+surface Terrain_InitSurfaces(Texture2D height_tex, float2 tc, float mask, int idx)
+{
+	surface S;
+	S.base = 0;
+	S.gloss = 0;
+	S.normal = 0;
+
+#ifdef TERRAIN_GTR_COMPATIBILITY
+	S.height = saturate(height_tex.Sample(smp_base, tc).a + ssfx_terrain_offset[idx]);
+#else
+	S.height = saturate(height_tex.Sample(smp_base, tc).r + ssfx_terrain_offset[idx]);
+#endif
+
+	S.AO = TERRAIN_POM_AO - S.height * S.height * TERRAIN_POM_AO;
+	S.mask = mask;
+	S.tc = tc;
+	return S;
+}
+
+void ApplyWeights(inout surface Sr, inout surface Sg, inout surface Sb, inout surface Sa, float4 weights)
+{
+	Sr.base.rgb *= weights.x; Sr.normal *= weights.x; Sr.gloss *= weights.x;
+	Sg.base.rgb *= weights.y; Sg.normal *= weights.y; Sg.gloss *= weights.y;
+	Sb.base.rgb *= weights.z; Sb.normal *= weights.z; Sb.gloss *= weights.z;
+	Sa.base.rgb *= weights.a; Sa.normal *= weights.a; Sa.gloss *= weights.a;
+}
+
+float SampleSnowVolumeHeight(DynSnowContext ctx, float2 uv, float2 wpos_xz, float road_reduce, float freeze_weight)
+{
+	float2 warp = s_puddles_normal.SampleLevel(smp_base, uv * 0.09f, 0).xy * 0.30f;
+	float2 w_uv = uv + warp;
+
+	float h_macro  = s_puddles_normal.SampleLevel(smp_base, w_uv * 0.16f, 0).z;
+	float h_medium = s_puddles_normal.SampleLevel(smp_base, w_uv * 0.52f + float2(0.27f, 0.61f), 0).z;
+
+	// Continuous 3D snow blanket (minimum 0.52 pillowy base + wind drifts up to 1.0)
+	float blanket = saturate(0.52f + (h_macro * 0.58f + h_medium * 0.42f) * 0.56f) * road_reduce * freeze_weight;
+
+	if (ctx.has_trench || ctx.has_cf)
+	{
+		float trench, berm, cf_melt, cf_slush;
+		dynsnow_eval_cached(ctx, wpos_xz, trench, berm, cf_melt, cf_slush);
+		blanket = blanket * (1.0f - trench * 0.92f) + berm * 0.26f;
+		blanket *= (1.0f - cf_melt);
+	}
+	return saturate(blanket);
+}
+
+// Unified 3D Volumetric Snow + Multi-Actor Trench + Smooth Campfire Melt Raymarcher (60 FPS on APU)
+void DynSnowParallax(
+	DynSnowContext ctx,
+	float2 tc_step,
+	float _step,
+	inout float2 out_tc,
+	inout float2 out_wpos_xz,
+	inout float out_height,
+	float dist_z,
+	float2 world_ray_step_xz,
+	float4 mask,
+	float freeze_weight)
+{
+	float road_reduce = lerp(1.0f, 0.82f, saturate(mask.a));
+	float start_h = SampleSnowVolumeHeight(ctx, out_tc, out_wpos_xz, road_reduce, freeze_weight);
+	if (dist_z >= 22.0f || freeze_weight <= 0.01f)
+	{
+		out_height = start_h;
+		return;
+	}
+
+	float curr_step = 0.0f;
+	float2 parallax_tc = out_tc;
+	float2 ray_wxz = out_wpos_xz;
+	float prev_Height = 0.0f;
+	float curr_Height = TERRAIN_POM_PLANE - start_h * TERRAIN_POM_PLANE;
+	float prev_Sam = start_h;
+	float curr_Sam = start_h;
+
+	float snow_step = (TERRAIN_POM_PLANE / 8.0f);
+	float2 snow_tc_step = tc_step * 5.20f;
+	int iter = 0;
+
+	[loop] while (curr_Height > curr_step && curr_step < TERRAIN_POM_PLANE && iter < 8)
+	{
+		prev_Height = curr_Height;
+		prev_Sam = curr_Sam;
+
+		parallax_tc -= snow_tc_step;
+		ray_wxz += world_ray_step_xz;
+		curr_step += snow_step;
+
+		curr_Sam = SampleSnowVolumeHeight(ctx, parallax_tc, ray_wxz, road_reduce, freeze_weight);
+		curr_Height = TERRAIN_POM_PLANE - curr_Sam * TERRAIN_POM_PLANE;
+		iter++;
+	}
+
+	float currentDiff = curr_Height - curr_step;
+	float denom = currentDiff - saturate(prev_Height - curr_step + snow_step);
+	float ratio = (abs(denom) > 0.0001f) ? saturate(currentDiff / denom) : 0.0f;
+
+	out_tc = lerp(parallax_tc, parallax_tc + snow_tc_step, ratio);
+	out_wpos_xz = lerp(ray_wxz, ray_wxz - world_ray_step_xz, ratio);
+	out_height = lerp(curr_Sam, prev_Sam, ratio);
+}
+
+void TerrainTextures(inout surface S, Texture2D s_base_det, Texture2D s_bump_det, float2 offset)
+{
+	if (S.mask <= 0)
+		return;
+
+	S.base       = s_base_det.Sample(smp_base, S.tc + offset);
+	S.normal     = s_bump_det.Sample(smp_base, S.tc + offset);
+	S.gloss      = S.normal.x;
+	S.normal.rgb = S.normal.wzy * 2.0f - 1.0f;
+	S.base.rgb  *= (1.0 - S.AO);
+}
+
+f_deffer main(p_bumped I)
+{
+	float3 Nw = normalize(float3(I.M1.z, I.M2.z, I.M3.z));
+	float3 eyeVec = normalize(I.position.xyz);
+	float2 N_refra = 0;
+
+	float4 C = s_base.Sample(smp_base, I.tcdh.xy);
+	float4 mask = s_mask.Sample(smp_base, I.tcdh.xy);
+	mask /= dot(mask, 1.0);
+
+#ifdef TERRAIN_GTR_COMPATIBILITY
+	surface Sr = Terrain_InitSurfaces(s_dt_r, I.tcdbump.xy, mask.x, 0);
+	surface Sg = Terrain_InitSurfaces(s_dt_g, I.tcdbump.xy, mask.y, 1);
+	surface Sb = Terrain_InitSurfaces(s_dt_b, I.tcdbump.xy, mask.z, 2);
+	surface Sa = Terrain_InitSurfaces(s_dt_a, I.tcdbump.xy, mask.w, 3);
+#else
+	surface Sr = Terrain_InitSurfaces(s_height_r, I.tcdbump.xy, mask.x, 0);
+	surface Sg = Terrain_InitSurfaces(s_height_g, I.tcdbump.xy, mask.y, 1);
+	surface Sb = Terrain_InitSurfaces(s_height_b, I.tcdbump.xy, mask.z, 2);
+	surface Sa = Terrain_InitSurfaces(s_height_a, I.tcdbump.xy, mask.w, 3);
+#endif
+
+	float dist_att = 1.0 - smoothstep(16.0f, 22.0f, I.position.z);
+
+	float3 eye = normalize(mul(float3x3(
+		I.M1.x, I.M2.x, I.M3.x,
+		I.M1.y, I.M2.y, I.M3.y,
+		I.M1.z, I.M2.z, I.M3.z), -I.position));
+
+	float view_angle = abs(dot(float3(0.0, 0.0, 1.0), eye));
+	float _step = rcp(lerp(10.0f, 4.0f, view_angle)) * TERRAIN_POM_PLANE;
+	float2 viewdir = eye.xy / (abs(eye.z) + 0.38f);
+	float2 tc_step = _step * viewdir * 0.068f * dist_att;
+
+	float PixelHeight = dot(float4(Sr.height, Sg.height, Sb.height, Sa.height), mask);
+	float snow_height_lift = 0.0f;
+
+#ifdef SSFX_PUDDLES
+	float freeze_f = saturate(shader_param_2.x);
+	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+
+	float height_str = saturate(TERRAIN_POM_PLANE - PixelHeight);
+	float puddles = saturate(height_str * 4.5f);
+
+	float raw_pmask = s_puddles_mask.Sample(smp_base, I.tcdh).r;
+	float PuddlesMask = (raw_pmask > 0.98f) ? 1.0f : (1.0f - raw_pmask);
+	float3 N = normalize(mul(m_inv_V, Nw));
+	float SlopeMask = saturate((1.0f - max(abs(N.x), abs(N.z))) - 0.9f) * 13.0f;
+	puddles *= SlopeMask * PuddlesMask * 0.55f;
+
+	float3 iceNormal = float3(0, 0, 1);
+	float crack_lines = 0.0f;
+	float frost_rim = 0.0f;
+
+	[branch] if (freeze_f > 0.001f && puddles > 0.01f)
+	{
+		float ice_scale = 140.0f / G_PUDDLES_RIPPLES_SCALE;
+		float3 IWN0 = s_puddles_normal.Sample(smp_base, I.tcdh * ice_scale);
+		float3 IWN1 = s_puddles_normal.Sample(smp_base, I.tcdh * ice_scale * 2.3f + float2(0.37f, 0.71f));
+		float2 crack_uv1 = I.tcdh * 110.0f + IWN0.xy * 0.40f;
+		float c1 = abs(frac(crack_uv1.x + sin(crack_uv1.y * 3.1415f) * 0.35f) - 0.5f) * 2.0f;
+		crack_lines = saturate(pow(saturate(c1), 12.0f)) * G_PUDDLES_CRACKS_INTENSITY;
+		float edge_band = smoothstep(0.02f, 0.35f, puddles) * (1.0f - smoothstep(0.35f, 0.88f, puddles));
+		frost_rim = edge_band * saturate(0.55f + IWN0.z * 0.85f);
+		float2 micro_ice = (IWN0.xy - 0.5f) * (0.28f + crack_lines * 1.35f);
+		iceNormal = normalize(float3((IWN0.xy + IWN1.xy - 1.0f) * G_PUDDLES_ICE_ROUGHNESS + micro_ice, 1.0f));
+	}
+#endif
+
+	TerrainTextures(Sr, s_dt_r, s_dn_r, N_refra);
+	TerrainTextures(Sg, s_dt_g, s_dn_g, N_refra);
+	TerrainTextures(Sb, s_dt_b, s_dn_b, N_refra);
+	TerrainTextures(Sa, s_dt_a, s_dn_a, N_refra);
+	ApplyWeights(Sr, Sg, Sb, Sa, mask);
+
+	float3 Ne = normalize(mul(float3x3(I.M1, I.M2, I.M3), Sr.normal.rgb + Sg.normal.rgb + Sb.normal.rgb + Sa.normal.rgb));
+	C.rgb = (Sr.base.rgb + Sg.base.rgb + Sb.base.rgb + Sa.base.rgb) * C.rgb * 2.0;
+	float G = Sr.gloss + Sg.gloss + Sb.gloss + Sa.gloss;
+
+#ifdef SSFX_PUDDLES
+	float3 PuddlesNormal = normalize(mul(m_V, float3(iceNormal.x, 1.0f, iceNormal.y)));
+	float ice_mask = saturate(puddles * puddles * 1.8f);
+	float3 frozen_color = lerp(C.rgb * G_PUDDLES_TINT, float3(0.91f, 0.95f, 0.99f), saturate(0.18f + frost_rim + crack_lines));
+	Ne = lerp(Ne, PuddlesNormal, ice_mask);
+	C.rgb = lerp(C.rgb, frozen_color, ice_mask);
+	G = lerp(G, G_PUDDLES_REFLECTIVITY, ice_mask);
+
+	[branch] if (snow_accum > 0.001f)
+	{
+		float3 wpos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
+		float3 rel_cam_w = mul((float3x3)m_inv_V, I.position.xyz);
+		float3 world_ray = normalize(rel_cam_w);
+		float2 world_ray_step_xz = (world_ray.xz / max(abs(world_ray.y), 0.25f)) * (0.24f / 8.0f) * dist_att;
+
+		float snow_slope = saturate((N.y - G_TERRAIN_SNOW_SLOPE) / (1.0f - G_TERRAIN_SNOW_SLOPE));
+		float snow_weight = saturate(snow_slope * snow_accum * G_TERRAIN_SNOW_STRENGTH);
+
+		// Prefilter 25 trail slots + 2 campfires once per pixel
+		DynSnowContext ctx;
+		dynsnow_init_context(wpos.xz, I.position.z, ctx);
+
+		float2 pom_tc = I.tcdbump * 1.15f;
+		float2 hit_wxz = wpos.xz - world_ray_step_xz * 4.0f;
+		float pom_h = 0.0f;
+		DynSnowParallax(ctx, tc_step, _step, pom_tc, hit_wxz, pom_h, I.position.z, world_ray_step_xz, mask, snow_weight);
+
+		float trench, berm, cf_melt, cf_slush;
+		dynsnow_eval_cached(ctx, hit_wxz, trench, berm, cf_melt, cf_slush);
+
+		float2 warp = s_puddles_normal.Sample(smp_base, pom_tc * 0.09f).xy * 0.30f;
+		float2 w_uv = pom_tc + warp;
+		float3 s_macro  = s_puddles_normal.Sample(smp_base, w_uv * 0.16f);
+		float3 s_medium = s_puddles_normal.Sample(smp_base, w_uv * 0.52f + float2(0.27f, 0.61f));
+		float3 s_fine   = s_puddles_normal.Sample(smp_base, pom_tc * 1.95f);
+
+		float drift_h = saturate(0.48f + (s_macro.z * 0.50f + s_medium.z * 0.35f + s_fine.z * 0.15f) * 0.55f);
+		float snow_mask = smoothstep(0.05f, 0.28f, snow_weight * drift_h) * (1.0f - ice_mask * 0.7f);
+		// Continuous radial snow-thinning gradient around lit campfires
+		snow_mask *= (1.0f - cf_melt);
+
+		float2 n_macro  = (s_macro.xy  * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 1.15f);
+		float2 n_medium = (s_medium.xy * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 0.90f);
+		float2 n_fine   = (s_fine.xy   * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 0.60f);
+
+		float3 world_snow_up = float3(0.0f, 1.0f, 0.0f);
+		[branch] if ((trench > 0.005f || berm > 0.005f || cf_slush > 0.01f) && I.position.z < 18.0f)
+		{
+			float tx1, bx1, cm1, cs1;
+			float tz1, bz1, cm2, cs2;
+			dynsnow_eval_cached(ctx, hit_wxz + float2(0.06f, 0.0f), tx1, bx1, cm1, cs1);
+			dynsnow_eval_cached(ctx, hit_wxz + float2(0.0f, 0.06f), tz1, bz1, cm2, cs2);
+			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
+			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
+			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
+			world_snow_up = normalize(float3((h0 - hx) * 3.8f, 1.0f, (h0 - hz) * 3.8f));
+		}
+
+		float3 snow_local_n = normalize(float3(n_macro + n_medium + n_fine, 1.0f));
+		float3 snow_view_n = normalize(mul(float3x3(I.M1, I.M2, I.M3), snow_local_n));
+		float3 trench_view_n = normalize(mul((float3x3)m_V, world_snow_up));
+		snow_view_n = normalize(lerp(snow_view_n, trench_view_n, saturate(trench * 0.85f + berm * 0.80f + cf_slush * 0.65f)));
+
+		float snow_ao = smoothstep(0.15f, 0.88f, drift_h) * (1.0f - trench * 0.75f) + berm * 0.18f;
+		float3 snow_shadow_color = float3(0.58f, 0.70f, 0.88f);
+		float3 snow_color = lerp(snow_shadow_color, G_TERRAIN_SNOW_COLOR, saturate(snow_ao));
+
+		float3 compressed_bottom = lerp(float3(0.36f, 0.46f, 0.62f), C.rgb * 0.45f, smoothstep(0.65f, 0.98f, trench));
+		snow_color = lerp(snow_color, compressed_bottom, saturate(trench * 0.88f));
+
+		float sparkle = pow(saturate(s_fine.x * s_fine.y * 3.1f), 8.0f) * (1.0f - trench);
+
+		Ne = lerp(Ne, snow_view_n, snow_mask * 0.98f);
+		C.rgb = lerp(C.rgb, snow_color + sparkle * 0.08f, snow_mask);
+		G = lerp(G, G_TERRAIN_SNOW_GLOSS + sparkle * 0.22f + trench * 0.14f, snow_mask);
+
+		// Smooth 3D Campfire Thawed Wet Earth & Glistening Melting Slush Rim
+		[branch] if (cf_melt > 0.002f || cf_slush > 0.002f)
+		{
+			float soil_detail = saturate(0.62f + s_medium.z * 0.52f);
+			// Blend natural underlying ground texture darkened by meltwater instead of a flat stamped color
+			float3 thawed_soil = lerp(C.rgb * 0.48f, float3(0.105f, 0.086f, 0.068f) * soil_detail, 0.55f);
+			float3 slush_col = float3(0.46f, 0.54f, 0.65f);
+			C.rgb = lerp(C.rgb, slush_col, saturate(cf_slush * 0.52f));
+			C.rgb = lerp(C.rgb, thawed_soil, saturate(cf_melt * 0.88f));
+			G = lerp(G, 0.44f, saturate(cf_melt * 0.65f + cf_slush * 0.80f));
+		}
+
+		snow_height_lift = snow_mask * pom_h * 2.15f;
+	}
+#endif
+
+	float combined_height = PixelHeight * (1.0f - saturate(snow_height_lift * 0.65f)) + snow_height_lift;
+	float d1 = dot(Nw, Nw * (0.78f - combined_height) * -0.56f);
+	float d2 = dot(eyeVec, Nw);
+	float3 offset_pos = I.position.xyz + eyeVec * (d1 / min(d2, -0.3f));
+
+	f_deffer O = pack_gbuffer(
+		float4(Ne, C.w),
+		float4(offset_pos, 0.95f),
+		float4(C.rgb, G)
+	);
+	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 0, 0);
+	return O;
+}

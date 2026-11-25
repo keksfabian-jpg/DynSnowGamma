@@ -1,5 +1,5 @@
 -- ==============================================================================================
--- DynSnow for S.T.A.L.K.E.R. G.A.M.M.A. - MCM Configuration Menu
+-- DynSnow v1.2 for S.T.A.L.K.E.R. G.A.M.M.A. - MCM Configuration Menu
 -- 100% Original Clean-Room Addon | License: MIT
 -- ==============================================================================================
 
@@ -7,6 +7,7 @@ local defaults = {
     ["always_snow"]           = true,
     ["enable_dynsnow"]        = true,
     ["enable_weapon_snow"]    = true,
+    ["weapon_snow_intensity"] = 1.0,
     ["enable_npc_tracks"]     = true,
     ["enable_campfire_melt"]  = true,
     ["campfire_melt_radius"]  = 2.2,
@@ -28,10 +29,11 @@ function on_mcm_load()
             { id = "title", type = "slide", link = "ui_options_slider_player", text = "ui_mcm_dynsnow_gamma_title", size = {512, 50}, spacing = 20 },
             { id = "always_snow", type = "check", val = 1, def = true },
             { id = "enable_weapon_snow", type = "check", val = 1, def = true },
+            { id = "weapon_snow_intensity", type = "track", val = 2, min = 0.2, max = 2.0, step = 0.1, def = 1.0 },
             { id = "line1", type = "line" },
             { id = "enable_dynsnow", type = "check", val = 1, def = true },
             { id = "enable_npc_tracks", type = "check", val = 1, def = true },
-            { id = "track_ttl_mult", type = "track", val = 2, min = 0.3, max = 3.0, step = 0.1, def = 1.0 },
+            { id = "track_ttl_mult", type = "track", val = 2, min = 0.5, max = 3.0, step = 0.1, def = 1.0 },
             { id = "line2", type = "line" },
             { id = "enable_campfire_melt", type = "check", val = 1, def = true },
             { id = "campfire_melt_radius", type = "track", val = 2, min = 1.0, max = 3.5, step = 0.1, def = 2.2 },

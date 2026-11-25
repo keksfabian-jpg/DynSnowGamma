@@ -1,0 +1,165 @@
+/**
+ * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.2 3D Deformation
+ * @ Description: Terrain Shader - Standard/Bump (Deep Snow Blanket + 5-Min Multi-Actor Trenches + Smooth Campfire Melt)
+ */
+
+#include "check_screenspace.h"
+#include "settings_screenspace_PUDDLES.h"
+#include "settings_screenspace_SSR.h"
+#include "common.h"
+
+#if defined(__has_include)
+	#if __has_include("screenspace_mvectors.h")
+		#include "screenspace_mvectors.h"
+		#define HAS_SSFX_MVECTORS
+	#endif
+#endif
+
+#include "sload.h"
+#include "screenspace_common_ripples.h"
+#include "dynsnow_common.h"
+
+Texture2D s_puddles_normal;
+Texture2D s_puddles_perlin;
+Texture2D s_puddles_mask;
+Texture2D s_rainsplash;
+
+#define USE_4_DETAIL
+
+#if defined(USE_TDETAIL) && defined(USE_4_DETAIL)
+#	define USE_4_BUMP
+#endif
+
+#ifdef USE_4_BUMP
+f_deffer main(p_bumped I)
+#else
+f_deffer main(p_flat I)
+#endif
+{
+	f_deffer O;
+
+	float4 D = tbase(I.tcdh);
+	float4 L = s_lmap.Sample(smp_base, I.tcdh);
+	float G = 0.001;
+
+#ifdef USE_TDETAIL
+ #ifdef USE_4_DETAIL
+	float4 mask = s_mask.Sample(smp_base, I.tcdh);
+	mask /= dot(mask, 1);
+
+  #ifdef USE_4_BUMP
+	float4 n_Rt = s_dn_r.Sample(smp_base, I.tcdbump).wzyx;
+	float4 n_Gt = s_dn_g.Sample(smp_base, I.tcdbump).wzyx;
+	float4 n_Bt = s_dn_b.Sample(smp_base, I.tcdbump).wzyx;
+	float4 n_At = s_dn_a.Sample(smp_base, I.tcdbump).wzyx;
+
+	float3 mix = (n_Rt.xyz - 0.5) * mask.r + (n_Gt.xyz - 0.5) * mask.g + (n_Bt.xyz - 0.5) * mask.b + (n_At.xyz - 0.5) * mask.a;
+	mix *= float3(0.6f, 0.6f, 1.0f);
+	float3 N = mul(float3x3(I.M1, I.M2, I.M3), mix.xyz);
+
+	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+
+	float3 N1 = mul(float3x3(I.M1, I.M2, I.M3), float3(0, 0, 1));
+	float3 N2 = normalize(mul(m_inv_V, normalize(N1)));
+
+	float4 dt = s_dt_r.Sample(smp_base, I.tcdbump) * mask.r
+	          + s_dt_g.Sample(smp_base, I.tcdbump) * mask.g
+	          + s_dt_b.Sample(smp_base, I.tcdbump) * mask.b
+	          + s_dt_a.Sample(smp_base, I.tcdbump) * mask.a;
+	D.rgb = 2.0f * D.rgb * dt.rgb;
+	G = n_Rt.w * mask.r + n_Gt.w * mask.g + n_Bt.w * mask.b + n_At.w * mask.a;
+
+	float snow_height_offset = 0.0f;
+
+	[branch] if (snow_accum > 0.001f)
+	{
+		float3 wpos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
+
+		DynSnowContext ctx;
+		dynsnow_init_context(wpos.xz, I.position.z, ctx);
+
+		float trench, berm, cf_melt, cf_slush;
+		dynsnow_eval_cached(ctx, wpos.xz, trench, berm, cf_melt, cf_slush);
+
+		float snow_slope = saturate((N2.y - G_TERRAIN_SNOW_SLOPE) / (1.0f - G_TERRAIN_SNOW_SLOPE));
+		float snow_weight = saturate(snow_slope * snow_accum * G_TERRAIN_SNOW_STRENGTH);
+
+		float2 snow_tc = I.tcdbump * 1.15f;
+		float2 warp = s_puddles_normal.Sample(smp_base, snow_tc * 0.09f).xy * 0.30f;
+		float2 w_uv = snow_tc + warp;
+
+		float3 s_macro  = s_puddles_normal.Sample(smp_base, w_uv * 0.16f);
+		float3 s_medium = s_puddles_normal.Sample(smp_base, w_uv * 0.52f + float2(0.27f, 0.61f));
+		float3 s_fine   = s_puddles_normal.Sample(smp_base, snow_tc * 1.95f);
+
+		float drift_h = saturate(0.48f + (s_macro.z * 0.50f + s_medium.z * 0.35f + s_fine.z * 0.15f) * 0.55f);
+		float snow_mask = smoothstep(0.05f, 0.28f, snow_weight * drift_h) * (1.0f - cf_melt);
+
+		float2 n_macro  = (s_macro.xy  * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 1.15f);
+		float2 n_medium = (s_medium.xy * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 0.90f);
+		float2 n_fine   = (s_fine.xy   * 2.0f - 1.0f) * (G_TERRAIN_SNOW_BUMP * 0.60f);
+
+		float3 snow_local_n = normalize(float3(n_macro + n_medium + n_fine, 1.0f));
+		float3 snow_view_n = normalize(mul(float3x3(I.M1, I.M2, I.M3), snow_local_n));
+
+		[branch] if ((trench > 0.005f || berm > 0.005f || cf_slush > 0.01f) && I.position.z < 18.0f)
+		{
+			float tx1, bx1, cm1, cs1, tz1, bz1, cm2, cs2;
+			dynsnow_eval_cached(ctx, wpos.xz + float2(0.06f, 0.0f), tx1, bx1, cm1, cs1);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, 0.06f), tz1, bz1, cm2, cs2);
+			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
+			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
+			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
+			float3 grad_v = normalize(mul((float3x3)m_V, normalize(float3((h0 - hx) * 3.8f, 1.0f, (h0 - hz) * 3.8f))));
+			snow_view_n = normalize(lerp(snow_view_n, grad_v, saturate(trench * 0.85f + berm * 0.80f + cf_slush * 0.65f)));
+		}
+
+		float snow_ao = smoothstep(0.15f, 0.88f, drift_h) * (1.0f - trench * 0.75f) + berm * 0.18f;
+		float3 snow_color = lerp(float3(0.58f, 0.70f, 0.88f), G_TERRAIN_SNOW_COLOR, saturate(snow_ao));
+		float3 compressed_bottom = lerp(float3(0.36f, 0.46f, 0.62f), D.rgb * 0.45f, smoothstep(0.65f, 0.98f, trench));
+		snow_color = lerp(snow_color, compressed_bottom, saturate(trench * 0.88f));
+
+		N = lerp(N, snow_view_n, snow_mask * 0.98f);
+		D.rgb = lerp(D.rgb, snow_color, snow_mask);
+		G = lerp(G, G_TERRAIN_SNOW_GLOSS, snow_mask);
+
+		[branch] if (cf_melt > 0.002f || cf_slush > 0.002f)
+		{
+			float soil_detail = saturate(0.62f + s_medium.z * 0.52f);
+			float3 thawed_soil = lerp(D.rgb * 0.48f, float3(0.105f, 0.086f, 0.068f) * soil_detail, 0.55f);
+			D.rgb = lerp(D.rgb, float3(0.46f, 0.54f, 0.65f), saturate(cf_slush * 0.52f));
+			D.rgb = lerp(D.rgb, thawed_soil, saturate(cf_melt * 0.88f));
+			G = lerp(G, 0.44f, saturate(cf_melt * 0.65f + cf_slush * 0.80f));
+		}
+
+		snow_height_offset = snow_mask * (drift_h * (1.0f - trench * 0.92f) + berm * 0.28f) * 0.48f;
+	}
+  #else
+	float3 N = I.N.xyz;
+	float snow_height_offset = 0.0f;
+  #endif
+ #else
+	D.rgb = 2 * D.rgb * s_detail.Sample(smp_base, I.tcdbump).rgb;
+	float snow_height_offset = 0.0f;
+ #endif
+#else
+	float3 N = I.N.xyz;
+	float snow_height_offset = 0.0f;
+#endif
+
+	float ms = xmaterial;
+#ifdef USE_R2_STATIC_SUN
+	ms = L.w;
+#endif
+
+	float4 Ne = float4(normalize(N), D.w);
+	O = pack_gbuffer(
+		Ne,
+		float4(I.position.xyz + Ne.xyz * (def_virtualh / 2.h + snow_height_offset), 0.95f),
+		float4(D.x, D.y, D.z, G));
+
+#ifdef HAS_SSFX_MVECTORS
+	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 0, 0);
+#endif
+	return O;
+}

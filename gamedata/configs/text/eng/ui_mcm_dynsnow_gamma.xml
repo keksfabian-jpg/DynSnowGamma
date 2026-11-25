@@ -4,7 +4,7 @@
         <text>!DynSnow</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_title">
-        <text>DynSnow for G.A.M.M.A.</text>
+        <text>DynSnow v1.2 for G.A.M.M.A.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_always_snow">
@@ -15,51 +15,58 @@
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_weapon_snow">
-        <text>Enable Dynamic Snow &amp; Frost on Weapons</text>
+        <text>Enable Subtle Frost &amp; Snow Dusting on Weapons</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_weapon_snow_desc">
-        <text>Accumulates realistic 3D frost and snow crystals on upward-facing surfaces of your weapon and gloves outdoors, shaking slightly on recoil and melting indoors or near campfires.</text>
+        <text>Accumulates delicate, crystalline rime frost and fine snow grains on upward-facing weapon ridges and crevices outdoors, shaking slightly on recoil and melting indoors or near campfires.</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_weapon_snow_intensity">
+        <text>Weapon Frost &amp; Snow Intensity</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_weapon_snow_intensity_desc">
+        <text>Adjusts the amount of rime frost and snow crystals settling on top of your weapon (1.0 = subtle Project INVERNO look).</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow">
-        <text>Enable 3D Snow Trench Deformation &amp; Footprints</text>
+        <text>Enable 3D Volumetric Snow Trench Deformation</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow_desc">
-        <text>Carves real-time 3D parallax snow trenches with raised side berms and directional bootprints that gradually fill back in as snow continues to fall.</text>
+        <text>Carves real-time 3D parallax snow trenches with raised side berms that stay for 5+ minutes and gradually snow back over smoothly from start to end.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks">
-        <text>Enable Stalker &amp; Mutant Snow Trails</text>
+        <text>Enable Stalker &amp; Mutant 3D Snow Trenches</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks_desc">
-        <text>Nearby stalkers and mutants (within 35m) leave directional boot and species-scaled paw trails in the snow so you can track them across the Zone.</text>
+        <text>Nearby stalkers and mutants (within 40m) carve real 3D snow trenches across the landscape that stay for 5+ minutes and slowly fill in from oldest tail to newest head.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_track_ttl_mult">
-        <text>Snow Track Fill-In Time Multiplier</text>
+        <text>3D Snow Trench Duration Multiplier (1.0 = 5-6 Min)</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_track_ttl_mult_desc">
-        <text>Controls how long footprints and craters stay visible before falling snow buries them (1.0 = ~45s in blizzards up to ~140s in light snow).</text>
+        <text>Controls how long 3D snow trenches persist before falling snow fills them back in from start to end (1.0 = 5.0 min in blizzards up to 6.0 min in normal snowfall).</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt">
-        <text>Enable 3D Campfire Snow Melting &amp; Re-Snowing</text>
+        <text>Enable Smooth 3D Campfire Snow Melting &amp; Re-Snowing</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_campfire_melt_desc">
-        <text>Lit campfires gradually melt surrounding 3D snow into dark wet earth and glistening slush. Once extinguished, fresh snowfall slowly buries the firepit again.</text>
+        <text>Lit campfires smoothly and continuously melt surrounding 3D snow outward into thawed soil and slush. When extinguished, snowfall smoothly buries the firepit again.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius">
         <text>Campfire Snow Melt Radius (Meters)</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_campfire_melt_radius_desc">
-        <text>Maximum radius around a burning campfire where 3D snow melts away.</text>
+        <text>Maximum radius around a burning campfire where 3D snow smoothly melts away.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_env_fx">
-        <text>Enable Snow Craters &amp; Tree Snow Shake</text>
+        <text>Enable Snow Dust &amp; Tree Branch Snow Cascades</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_env_fx_desc">
-        <text>Gunshots and explosions churn craters in snow, kick up snow dust, and shake falling snow cascades loose from tree branches.</text>
+        <text>Sprinting, landings, gunshots, and explosions kick up snow dust and shake falling snow cascades loose from tree canopies.</text>
     </string>
 </string_table>
