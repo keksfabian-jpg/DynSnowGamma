@@ -16,6 +16,9 @@
 #ifndef DYNSNOW_COMMON_H
 #define DYNSNOW_COMMON_H
 
+#ifndef G_PUDDLES_FROZEN
+uniform float4 shader_param_2;
+#endif
 uniform float4 shader_param_5;
 
 float dynsnow_hash21(float2 p)
