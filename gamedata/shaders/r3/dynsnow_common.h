@@ -168,14 +168,14 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 	cf2_wpos = 0.0f; cf2_ok = false;
 
 	float f_hi = heatvision_params2.z;
-	if (f_hi < 0.49f || f_hi >= 0.89f)
+	if (f_hi < 0.49f || f_hi >= 0.935f)
 		return false;
 
 	uint hi_code = (uint)floor((f_hi - 0.5f) * 8388608.0f + 0.5f);
 	uint m1 = hi_code & 1023u;         // bit 9 = active1, bits 0..8 = ix1_hi9
 	uint m2 = (hi_code >> 10u) & 1023u; // bit 9 = active2, bits 0..8 = ix2_hi9
 
-	if (((m1 >> 9u) & 1u) != 0u && hdr10_parameters4.y >= 0.49f && hdr10_parameters4.y < 0.89f)
+	if (((m1 >> 9u) & 1u) != 0u && hdr10_parameters4.y >= 0.49f && hdr10_parameters4.y < 0.935f)
 	{
 		uint lo1 = (uint)floor((hdr10_parameters4.y - 0.5f) * 16777216.0f + 0.5f);
 		uint iz1 = lo1 & 65535u;
@@ -184,7 +184,7 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 		cf1_ok = true;
 	}
 
-	if (((m2 >> 9u) & 1u) != 0u && hdr10_parameters4.z >= 0.49f && hdr10_parameters4.z < 0.89f)
+	if (((m2 >> 9u) & 1u) != 0u && hdr10_parameters4.z >= 0.49f && hdr10_parameters4.z < 0.935f)
 	{
 		uint lo2 = (uint)floor((hdr10_parameters4.z - 0.5f) * 16777216.0f + 0.5f);
 		uint iz2 = lo2 & 65535u;
@@ -209,6 +209,40 @@ float dynsnow_seg_dist(float2 p_w, float2 a_w, float2 b_w, out float along_t)
 	}
 	along_t = (len2 > 0.0001f) ? saturate(dot(p_w - a_w, ba) / len2) : 0.0f;
 	return length((p_w - a_w) - ba * along_t);
+}
+
+void dynsnow_test_segment(
+	float2 wpos_xz,
+	float2 a_pos,
+	float2 b_pos,
+	float a_w,
+	float b_w,
+	float search_r,
+	inout float best_d0,
+	inout float best_d1,
+	inout DynSnowContext ctx)
+{
+	float2 bb_min = min(a_pos, b_pos) - search_r;
+	float2 bb_max = max(a_pos, b_pos) + search_r;
+	if (wpos_xz.x >= bb_min.x && wpos_xz.x <= bb_max.x && wpos_xz.y >= bb_min.y && wpos_xz.y <= bb_max.y)
+	{
+		float t_seg;
+		float d = dynsnow_seg_dist(wpos_xz, a_pos, b_pos, t_seg);
+		if (d < best_d0)
+		{
+			best_d1 = best_d0;
+			ctx.seg1_a = ctx.seg0_a; ctx.seg1_b = ctx.seg0_b; ctx.seg1_w = ctx.seg0_w;
+			best_d0 = d;
+			ctx.seg0_a = a_pos; ctx.seg0_b = b_pos; ctx.seg0_w = float2(a_w, b_w);
+			ctx.seg_count = min(ctx.seg_count + 1, 2);
+		}
+		else if (d < best_d1)
+		{
+			best_d1 = d;
+			ctx.seg1_a = a_pos; ctx.seg1_b = b_pos; ctx.seg1_w = float2(a_w, b_w);
+			ctx.seg_count = 2;
+		}
+	}
 }
 
 // Single-pass per-pixel full-map spatial prefilter (0m .. 1500m+ across HIGH, MID, and LOW terrain shaders!)
@@ -264,8 +298,8 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 		}
 	}
 
-	// 2. Unpack 37-float Dual-Scale Hybrid Anchor + Delta Stream (3.2km x 3.2km, up to 73.8m per 1-float landmark!)
-	float raw[37] = {
+	// 2. Unpack 38-float 23-bit Write-Once Stream (Anchor + Single/Coarse Step + DualStep = up to 72 immutable segments!)
+	float raw[38] = {
 		hdr10_parameters3.x, hdr10_parameters3.y, hdr10_parameters3.z,
 		hdr10_parameters3.w, hdr10_parameters5.x, hdr10_parameters5.y,
 		hdr10_parameters5.z, hdr10_parameters5.w, hdr10_parameters6.x,
@@ -278,7 +312,7 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 		heatvision_params1.z, heatvision_params1.w, heatvision_params3.x,
 		heatvision_params3.y, heatvision_params3.z, heatvision_params3.w,
 		heatvision_params4.x, heatvision_params4.y, heatvision_params4.z,
-		heatvision_params4.w
+		heatvision_params4.w, heatvision_params2.w
 	};
 
 	float search_r = 0.96f * ctx.width_boost;
@@ -291,22 +325,73 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 	bool has_prev = false;
 
 	int idx = 0;
-	[loop] while (idx < 37)
+	[loop] while (idx < 38)
 	{
 		float f = raw[idx];
-		// End-of-stream marker is 0.92f (-0.08f on sub1 slots, strictly inside all cvar min/max bounds!)
-		if (f > 0.89f || f < 0.45f)
+		// End-of-stream marker is 0.95f (-0.05f on sub1 slots, strictly inside [-0.5..+0.5] and [0.0..1.0]!)
+		if (f > 0.935f || f < 0.45f)
 			break;
 
-		if (f >= 0.7499f && f < 0.88f)
+		if (f >= 0.68749f && f < 0.935f)
 		{
-			// 1-float Dual-Scale Delta Node (bit 19 = 0: 19.5cm step; bit 19 = 1: 6x = 1.17m landmark step up to +-73.8m!)
+			// 1-float DualStep Node: 2 immutable walked steps ([-11..+11] cells = +-2.15m each) in ONE float!
 			idx += 1;
 			if (!has_prev)
 				continue;
 
-			uint code = (uint)floor((f - 0.5f) * 8388608.0f + 0.5f);
-			uint payload = code - 2097152u;
+			uint u23 = (uint)floor((f - 0.5f) * 16777216.0f + 0.5f);
+			if (u23 < 3145728u)
+				continue;
+			uint dual = u23 - 3145728u;
+			uint s2 = dual % 529u;
+			uint tmp = dual / 529u;
+			uint s1 = tmp % 529u;
+			uint ist4 = (tmp / 529u) + 1u;
+			if (ist4 > 14u)
+			{
+				has_prev = false;
+				continue;
+			}
+
+			int dx1 = (int)(s1 / 23u) - 11;
+			int dz1 = (int)(s1 % 23u) - 11;
+			int dx2 = (int)(s2 / 23u) - 11;
+			int dz2 = (int)(s2 % 23u) - 11;
+			float w2 = (float)ist4 * (1.0f / 14.0f);
+			float w1 = 0.5f * (prev_w + w2);
+
+			int ix1 = clamp(prev_ix + dx1, 0, 16383);
+			int iz1 = clamp(prev_iz + dz1, 0, 16383);
+			float2 pos1 = float2(
+				-DYNSNOW_WORLD_HALF + ((float)ix1 + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
+				-DYNSNOW_WORLD_HALF + ((float)iz1 + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
+			);
+			dynsnow_test_segment(wpos_xz, prev_pos, pos1, prev_w, w1, search_r, best_d0, best_d1, ctx);
+
+			int ix2 = clamp(ix1 + dx2, 0, 16383);
+			int iz2 = clamp(iz1 + dz2, 0, 16383);
+			float2 pos2 = float2(
+				-DYNSNOW_WORLD_HALF + ((float)ix2 + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
+				-DYNSNOW_WORLD_HALF + ((float)iz2 + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
+			);
+			dynsnow_test_segment(wpos_xz, pos1, pos2, w1, w2, search_r, best_d0, best_d1, ctx);
+
+			prev_ix = ix2;
+			prev_iz = iz2;
+			prev_pos = pos2;
+			prev_w = w2;
+		}
+		else if (f >= 0.62499f && f < 0.68749f)
+		{
+			// 1-float Single/Coarse Step Node (exact 19.5cm step up to +-12.3m, or 6x step up to +-73.8m)
+			idx += 1;
+			if (!has_prev)
+				continue;
+
+			uint u23 = (uint)floor((f - 0.5f) * 16777216.0f + 0.5f);
+			if (u23 < 2097152u)
+				continue;
+			uint payload = u23 - 2097152u;
 			int dz_step = (int)(payload & 127u) - 64;
 			int dx_step = (int)((payload >> 7u) & 127u) - 64;
 			uint ist = (payload >> 14u) & 31u;
@@ -324,46 +409,25 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 				-DYNSNOW_WORLD_HALF + ((float)cur_iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
 			);
 			float cur_w = (float)ist * (1.0f / 31.0f);
-
-			float2 bb_min = min(prev_pos, cur_pos) - search_r;
-			float2 bb_max = max(prev_pos, cur_pos) + search_r;
-			if (wpos_xz.x >= bb_min.x && wpos_xz.x <= bb_max.x && wpos_xz.y >= bb_min.y && wpos_xz.y <= bb_max.y)
-			{
-				float t_seg;
-				float d = dynsnow_seg_dist(wpos_xz, prev_pos, cur_pos, t_seg);
-				if (d < best_d0)
-				{
-					best_d1 = best_d0;
-					ctx.seg1_a = ctx.seg0_a; ctx.seg1_b = ctx.seg0_b; ctx.seg1_w = ctx.seg0_w;
-					best_d0 = d;
-					ctx.seg0_a = prev_pos; ctx.seg0_b = cur_pos; ctx.seg0_w = float2(prev_w, cur_w);
-					ctx.seg_count = min(ctx.seg_count + 1, 2);
-				}
-				else if (d < best_d1)
-				{
-					best_d1 = d;
-					ctx.seg1_a = prev_pos; ctx.seg1_b = cur_pos; ctx.seg1_w = float2(prev_w, cur_w);
-					ctx.seg_count = 2;
-				}
-			}
+			dynsnow_test_segment(wpos_xz, prev_pos, cur_pos, prev_w, cur_w, search_r, best_d0, best_d1, ctx);
 
 			prev_ix = cur_ix;
 			prev_iz = cur_iz;
 			prev_pos = cur_pos;
 			prev_w = cur_w;
 		}
-		else if (f >= 0.49f && f < 0.7499f && (idx + 1) < 37)
+		else if (f >= 0.49f && f < 0.62499f && (idx + 1) < 38)
 		{
-			// 2-float Anchor Node (starts a new chain at exact 14-bit world ix, iz)
+			// 2-float Anchor Node (starts a chain at exact 14-bit world ix, iz; strength 0..30 -> 0.0 .. 1.0 for smooth tail taper!)
 			float f1 = raw[idx + 1];
 			idx += 2;
-			if (f1 < 0.49f || f1 >= 0.7499f)
+			if (f1 < 0.49f || f1 >= 0.62499f)
 			{
 				has_prev = false;
 				continue;
 			}
-			uint code0 = (uint)floor((f  - 0.5f) * 8388608.0f + 0.5f);
-			uint code1 = (uint)floor((f1 - 0.5f) * 8388608.0f + 0.5f);
+			uint code0 = (uint)floor((f  - 0.5f) * 16777216.0f + 0.5f);
+			uint code1 = (uint)floor((f1 - 0.5f) * 16777216.0f + 0.5f);
 			uint iz = code0 & 16383u;
 			uint ix = ((code0 >> 14u) & 127u) | ((code1 & 127u) << 7u);
 			uint ist = (code1 >> 7u) & 31u;
@@ -378,7 +442,8 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 				-DYNSNOW_WORLD_HALF + ((float)ix + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
 				-DYNSNOW_WORLD_HALF + ((float)iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
 			);
-			prev_w = (float)ist * (1.0f / 31.0f);
+			// ist == 1 encodes near-zero tapered tail tip (0.02f); ist == 31 encodes full 1.0f!
+			prev_w = (ist == 1u) ? 0.02f : ((float)ist * (1.0f / 31.0f));
 			has_prev = true;
 		}
 		else

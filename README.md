@@ -1,4 +1,4 @@
-# ❄️ DynSnow for S.T.A.L.K.E.R. G.A.M.M.A. (`DynSnowGamma` v1.7 — Full-Map Edition)
+# ❄️ DynSnow for S.T.A.L.K.E.R. G.A.M.M.A. (`DynSnowGamma` v1.8 — Write-Once Full-Map Edition)
 
 An interactive, **zero-VRAM (`0 KB` textures!) full-map 3D volumetric snow deformation, subtle weapon frost dusting, smooth campfire snow-melting, and independent NPC vs. World-Object snow control** addon for **S.T.A.L.K.E.R. G.A.M.M.A.** (Anomaly 1.5.3 DX11 + Screen Space Shaders 23.5 + Project: INVERNO), inspired by **dynSnow** from Garry's Mod.
 
@@ -6,10 +6,10 @@ Engineered with a single-pass per-pixel spatial prefilter (`DynSnowContext`), ca
 
 ---
 
-## ✨ Features (v1.7)
+## ✨ Features (v1.8)
 
-- **🗺️ True Map-Wide Visibility (`0 m .. 1,500+ m` across `3.2 km × 3.2 km` — Zero Camera Shift, Zero Distance Cutoff!):**
-  Encodes absolute `3,200 m × 3,200 m` world-space coordinates via a dual-scale bit-exact **37-float Anchor + Landmark Delta stream** (`19.5 cm` fine steps + `73.8 m` consolidated straight landmarks, zero torus wrapping, zero corner-cutting, **0.00 mm shift when walking or looking around!**) and renders 3D snow trenches, sunlit side berms, and melted campfires across **all three** terrain LOD tiers (`deffer_terrain_high_flat_d.ps`, `deffer_terrain_mid_flat.ps`, and `deffer_terrain_low_flat.ps` + `deffer_impl_flat.ps`).
+- **🗺️ 100% Write-Once Immutable Snow Trails (`0 m .. 1,500+ m` across `3.2 km × 3.2 km` — Zero Reshaping, Zero Camera Shift!):**
+  Every footstep stamped into the snow is **100% write-once / append-only** (never overwritten, consolidated, or rubber-banded when NPCs continue walking!) and packed via a **23-bit DualStep + Anchor stream** (up to **2 immutable steps per single float = 72 segments simultaneously**, smooth zero-pop tail tapering, and **0.00 mm shift** when walking or looking around) across **all three** terrain LOD tiers (`deffer_terrain_high_flat_d.ps`, `deffer_terrain_mid_flat.ps`, and `deffer_terrain_low_flat.ps` + `deffer_impl_flat.ps`).
   - **100% Camera-Rotation-Invariant + 3DSS Sniper Scope Support:** Looking around (`360°`) never evicts, reorders, or shifts nearby/distant trails, while aiming down sights (including **3DSS Picture-in-Picture scopes** and binoculars) automatically prioritizes distant Stalkers & Mutants under your crosshair across hillsides and valleys, fading smoothly from start to end over **5–6 minutes (`>= 305s`)**.
 - **🧍🚗 Independent MCM Sliders for NPC/Mutant Snow vs. Vehicle/World-Object Snow:**
   Distinguishes skeletal-skinned characters (`SKIN_0..SKIN_4`: Stalkers, NPCs, Mutants) from static & rigid world geometry (cars, trucks, BTRs, roofs, barrels, crates, buildings) directly in the DX11 vertex/pixel pipeline so you can turn down or completely disable (`0.0`) snow on NPCs & Mutants while keeping snow on vehicles & roofs untouched!
@@ -38,7 +38,7 @@ Engineered with a single-pass per-pixel spatial prefilter (`DynSnowContext`), ca
 
 ## 🇩🇪 Kurzbeschreibung (Deutsch)
 
-**DynSnowGamma (v1.7 — Full-Map Edition)** bringt echte volumetrische 3D-Schneeverformung nach Vorbild von *Garry's Mod dynSnow* nach **S.T.A.L.K.E.R. G.A.M.M.A.**:
+**DynSnowGamma (v1.8 — Write-Once Full-Map Edition)** bringt echte volumetrische 3D-Schneeverformung nach Vorbild von *Garry's Mod dynSnow* nach **S.T.A.L.K.E.R. G.A.M.M.A.**:
 - **Quer über die gesamte Map sichtbar (`0 m bis 1.500+ m` ohne Distanzlimit)** über alle drei Terrain-LOD-Stufen (*High*, *Mid* & *Low*)
 - **Getrennte MCM-Regler für NPCs/Mutanten vs. Autos/Dächer/Weltobjekte** (`0.0 = komplett aus` auf Charakteren/Mutanten, während Schnee auf Fahrzeugen & Dächern erhalten bleibt)
 - **5+ Minuten persistente 3D-Schneegräben** für Spieler sowie alle aktiven Stalker & Mutanten auf der gesamten Karte

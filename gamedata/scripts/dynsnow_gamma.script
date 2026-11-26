@@ -1,5 +1,5 @@
 -- ==============================================================================================
--- DynSnow v1.7 (Full-Map Edition) for S.T.A.L.K.E.R. G.A.M.M.A. (dynsnow_gamma.script)
+-- DynSnow v1.8 (Write-Once Immutable Edition) for S.T.A.L.K.E.R. G.A.M.M.A. (dynsnow_gamma.script)
 -- Inspired by Garry's Mod dynSnow | 100% Original Clean-Room Implementation | License: MIT
 --
 -- Features in v1.4 (Full-Map Edition):
@@ -82,13 +82,27 @@ local SCALAR_RAW_SLOTS = {
 -- raw[26..29] = heat_vision_steps         (heatvision_params1.xyzw)
 -- raw[30..33] = heat_vision_args_1        (heatvision_params3.xyzw)
 -- raw[34..37] = heat_vision_args_2        (heatvision_params4.xyzw)
--- Total = 37 floats (Bit-Exact Hybrid Anchor + 1-Float Delta Stream = up to 35 connected segments!)
-local MAX_STREAM_FLOATS = 37
+-- raw[38]     = heat_vision_blurring.w    (heatvision_params2.w)
+-- Total = 38 floats, strictly partitioned into FIXED non-competing slots:
+--   Player Slot : 11 floats (up to 18 immutable DualStep segments = ~25m)
+--   NPC Slot 1  :  8 floats (up to 12 immutable DualStep segments = ~18m, PINNED!)
+--   NPC Slot 2  :  7 floats (up to 10 immutable DualStep segments = ~15m, PINNED!)
+--   NPC Slot 3  :  6 floats (up to  8 immutable DualStep segments = ~12m, PINNED!)
+--   NPC Slot 4  :  6 floats (up to  8 immutable DualStep segments = ~12m, PINNED / 3DSS Scope Slot!)
+-- Walking as the player NEVER steals floats from NPCs/Mutants and NEVER evicts pinned nearby trails!
+local MAX_STREAM_FLOATS = 38
+local PLAYER_FIXED_CAP  = 12
+local NPC_SLOT_CAPS     = { 8, 7, 6, 5 }
+local NUM_NPC_SLOTS     = 4
+local END_STREAM_MARKER = 0.95
+local last_raw38_val    = 0.95
 
 local SKY_RAYS = {
     vector():set(0.0,   1.0,   0.0),
-    vector():set(0.18,  0.983, 0.04),
-    vector():set(-0.18, 0.983, -0.04),
+    vector():set(0.22,  0.975, 0.0),
+    vector():set(-0.22, 0.975, 0.0),
+    vector():set(0.0,   0.975, 0.22),
+    vector():set(0.0,   0.975, -0.22),
 }
 
 local cfg_always_snow       = true
@@ -111,8 +125,11 @@ local PLAYER_TRAIL_ID       = 0
 local world_trails          = {}
 local player_live_head      = nil
 local player_was_valid      = false
+local player_indoor_streak  = 0
 local last_player_track_tg  = 0
 local last_prune_tg         = 0
+
+local pinned_npc_uids       = { nil, nil, nil, nil }
 
 local weapon_snow_amount    = 0.65
 local last_wpn_snow_tg      = 0
@@ -169,32 +186,40 @@ local function world_to_grid(x, z)
     return ix, iz
 end
 
--- Encode 2-float Anchor Node (starts a chain at exact 14-bit world grid ix, iz with 5-bit fade 1..31)
+-- 23-Bit Mantissa Encoding (1 / 16777216 exact float32 ULP in [0.50 .. 0.96]):
+--   1. Anchor (2 floats in [0.5000 .. 0.6250)): exact 14-bit ix, iz + 5-bit fade 1..31
 local function encode_anchor_floats(ix, iz, s)
     local ist = clamp_val(math.floor(s * 31.0 + 0.5), 1, 31)
     local ix_lo7 = ix % 128
     local ix_hi7 = math.floor(ix / 128)
     local code0 = ix_lo7 * 16384 + iz
     local code1 = ist * 128 + ix_hi7
-    return (0.5 + code0 / 8388608.0), (0.5 + code1 / 8388608.0)
+    return (0.5 + code0 / 16777216.0), (0.5 + code1 / 16777216.0)
 end
 
--- Encode 1-float Dual-Scale Delta Node:
---   is_coarse = false (bit 19 = 0): exact 19.5cm grid step [-63..+63] (+-12.3m)
---   is_coarse = true  (bit 19 = 1): 6x landmark step (1.17m) [-63..+63]*6 (+-73.8m in 1 float!)
+--   2. Single/Coarse Step (1 float in [0.6250 .. 0.6875)): 1x step [-63..+63] (+-12.3m) or 6x step (+-73.8m)
 local function encode_delta_float(dx_step, dz_step, s, is_coarse)
     local ist = clamp_val(math.floor(s * 31.0 + 0.5), 1, 31)
     local dx7 = clamp_val(dx_step + 64, 1, 127)
     local dz7 = clamp_val(dz_step + 64, 1, 127)
     local coarse_bit = is_coarse and 524288 or 0
     local payload20 = coarse_bit + ((ist * 128) + dx7) * 128 + dz7
-    return (0.5 + (2097152 + payload20) / 8388608.0)
+    return (0.5 + (2097152 + payload20) / 16777216.0)
+end
+
+--   3. DualStep (1 float in [0.6875 .. 0.9211)): packs TWO consecutive immutable steps ([-11..+11] cells = +-2.15m each) in 1 float!
+local function encode_dual_delta_float(dx1, dz1, dx2, dz2, s2_val)
+    local ist4 = clamp_val(math.floor(s2_val * 14.0 + 0.5), 1, 14)
+    local s1 = clamp_val(dx1 + 11, 0, 22) * 23 + clamp_val(dz1 + 11, 0, 22)
+    local s2 = clamp_val(dx2 + 11, 0, 22) * 23 + clamp_val(dz2 + 11, 0, 22)
+    local dual_payload = ((ist4 - 1) * 529 + s1) * 529 + s2
+    return (0.5 + (3145728 + dual_payload) / 16777216.0)
 end
 
 -- Encode 2 Full-Map Campfires (16-bit X + 16-bit Z = 4.9cm precision across 3200m map!)
--- Inactive marker = 0.92 (safe inside all cvar min/max bounds)
+-- Inactive marker = 0.95 (safe inside all cvar min/max bounds)
 local function encode_fullmap_campfires(p1, r1, p2, r2)
-    local f_lo1, f_lo2 = 0.92, 0.92
+    local f_lo1, f_lo2 = END_STREAM_MARKER, END_STREAM_MARKER
     local m1, m2 = 0, 0
 
     if p1 and r1 > 0.008 then
@@ -213,7 +238,7 @@ local function encode_fullmap_campfires(p1, r1, p2, r2)
         m2 = 512 + math.floor(ix2 / 128)
     end
 
-    local f_hi = (m1 == 0 and m2 == 0) and 0.92 or (0.5 + (m2 * 1024 + m1) / 8388608.0)
+    local f_hi = (m1 == 0 and m2 == 0) and END_STREAM_MARKER or (0.5 + (m2 * 1024 + m1) / 8388608.0)
     return f_lo1, f_lo2, f_hi
 end
 
@@ -254,21 +279,22 @@ end
 
 local function has_open_sky(pos, ignore_obj)
     if level_is_changing then return false end
-    -- Start at +1.95m (above NPC head, backpack, and rifle) and raycast ONLY static map geometry (rqtStatic = 1)
-    -- up to 7.0m overhead so indoor ceilings/roofs block snow while forest tree canopies (8-25m) NEVER block NPC snow trails!
-    local origin = vector():set(pos.x, pos.y + 1.95, pos.z)
+    -- Cast 5 static-geometry rays up 4.6m (ceiling height <= 6.45m) from +1.85m:
+    -- Overhead cables, narrow pipes, tree branches, and narrow Rostok alleys NEVER block >= 4 of 5 angled rays,
+    -- while real indoor rooms, bunkers, hallways, and porches block all 5/5 rays!
+    local origin = vector():set(pos.x, pos.y + 1.85, pos.z)
     local static_flag = (rq_target and rq_target.rqtStatic) or 1
     local open_votes = 0
-    for i = 1, 3 do
+    for i = 1, 5 do
         local pick = ray_pick()
         pick:set_position(origin)
         pick:set_direction(SKY_RAYS[i])
         pick:set_flags(static_flag)
-        pick:set_range(7.0)
+        pick:set_range(4.6)
         if ignore_obj then pick:set_ignore_object(ignore_obj) end
         pick:query()
         local d = pick:get_distance()
-        if d <= 0 or d >= 6.8 then
+        if d <= 0 or d >= 4.4 then
             open_votes = open_votes + 1
             if open_votes >= 2 then return true end
         end
@@ -285,12 +311,7 @@ end
 
 local function is_actor_indoors()
     if not db.actor then return false end
-    if _G.inverno_freezing_mechanic and _G.inverno_freezing_mechanic.is_actor_indoors then
-        if _G.inverno_freezing_mechanic.is_actor_indoors() then
-            return not has_open_sky(db.actor:position(), db.actor)
-        end
-        return false
-    end
+    -- Pure overhead roof check (do NOT use inverno high_cover_fraction, which false-triggers in outdoor alleys between buildings!)
     return not has_open_sky(db.actor:position(), db.actor)
 end
 
@@ -394,11 +415,9 @@ local function is_inside_melted_campfire_zone(pos)
     return false
 end
 
--- Immutable Landmark World Trail Recorder:
---   1. Fine 0.55m..0.75m steps right under the actor's boots for crisp curve fidelity around sandbags & obstacles.
---   2. Once the actor walks >= 2 steps past a vertex, normal left-right gait sway (<= 32cm) is consolidated ONCE,
---      while real turns (> 31 deg or > 32cm offset) and 28m milestones are permanently locked (`landmark = true`).
---   3. Stabilized vertices NEVER move or resample per frame — 0.00mm jitter and 150-300m+ reach per trail!
+-- 100% Write-Once / Append-Only World Trail Recorder:
+--   Once a snow point (ix, iz) is stamped into `pts`, it is NEVER modified, NEVER overwritten,
+--   and NEVER deleted (`table.remove`) while the actor moves — stamped snow stays 100% frozen in place!
 local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_chain)
     if math.abs(pos.x) > 1595.0 or math.abs(pos.z) > 1595.0 then return false end
 
@@ -419,7 +438,7 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
     local pts = chain.pts
     local n = #pts
     if n == 0 then
-        pts[1] = { x = pos.x, y = pos.y, z = pos.z, ix = ix, iz = iz, t = tg, w = base_w, landmark = true }
+        pts[1] = { x = pos.x, y = pos.y, z = pos.z, ix = ix, iz = iz, t = tg, w = base_w }
         return true
     end
 
@@ -434,7 +453,12 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
         return append_world_trail_point(actor_id, pos, tg, base_w, true)
     end
 
-    local req_d2 = 0.42 -- 0.65m straight step (consolidated into <=28m landmarks behind the actor!)
+    -- Adaptive write-once step threshold (fits DualStep [-11..+11] = +-2.15m per step!):
+    --   Sharp turn / loop (cos_a < 0.94): 0.72m crisp curve resolution
+    --   Gentle bend       (cos_a < 0.99): 1.15m smooth stride
+    --   Straight walk     (cos_a >= 0.99): 1.65m clean stride (~3.3m per single DualStep float!)
+    local is_plr = (actor_id == PLAYER_TRAIL_ID)
+    local req_d2 = is_plr and 0.56 or 1.32 -- 0.75m crisp 1st-person player stride; 1.15m NPC default
     if n >= 2 then
         local prev_pt = pts[n - 1]
         local vx1, vz1 = last_pt.x - prev_pt.x, last_pt.z - prev_pt.z
@@ -442,12 +466,14 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
         local l2 = math.sqrt(d2)
         if l1 > 0.05 and l2 > 0.05 then
             local cos_a = (vx1 * dx + vz1 * dz) / (l1 * l2)
-            if cos_a < 0.95 then
-                req_d2 = 0.30 -- 0.55m crisp curve preservation around sandbags & corners!
+            if cos_a < 0.94 then
+                req_d2 = is_plr and 0.36 or 0.52 -- tight loops & sandbag corners
+            elseif (not is_plr) and cos_a >= 0.99 then
+                req_d2 = 2.72 -- 1.65m straight NPC walks (zero retrospective editing!)
             end
         end
     else
-        req_d2 = 0.25 -- 0.50m first step
+        req_d2 = is_plr and 0.36 or 0.64
     end
 
     if d2 < req_d2 then
@@ -458,60 +484,8 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
         return false
     end
 
-    -- Gentle boot-tip merge on pure straight steps (<= 9cm deviation, <= 4.5m) right behind feet
-    if n >= 2 and not last_pt.landmark then
-        local prev_pt = pts[n - 1]
-        local acx = pos.x - prev_pt.x
-        local acz = pos.z - prev_pt.z
-        local ac_len2 = acx * acx + acz * acz
-        if ac_len2 > 0.04 and ac_len2 <= 20.25 and (tg - prev_pt.t) <= 8000 then
-            local abx = last_pt.x - prev_pt.x
-            local abz = last_pt.z - prev_pt.z
-            local perp_err = math.abs(abx * acz - abz * acx) / math.sqrt(ac_len2)
-            if perp_err <= 0.09 then
-                pts[n] = { x = pos.x, y = pos.y, z = pos.z, ix = ix, iz = iz, t = tg, w = base_w, landmark = false }
-                return true
-            end
-        end
-    end
-
-    pts[n + 1] = { x = pos.x, y = pos.y, z = pos.z, ix = ix, iz = iz, t = tg, w = base_w, landmark = false }
-
-    -- One-time permanent Landmark Consolidation 3 steps (~2.0m) behind the head:
-    -- Checks deviation against both the immediate chord (A->C) and the 2.5m lookahead chord (A->head)
-    -- so +-25cm human/AI stride sway consolidates into ~25-30m straight landmarks (~12 floats per 200m!)
-    -- while EVERY real turn (>= 30 deg around sandbags/corners) has wide_err >> 0.40m and locks permanently!
-    local total = #pts
-    if total >= 6 then
-        local idx_b = total - 3
-        local pt_b = pts[idx_b]
-        if not pt_b.landmark then
-            local pt_a = pts[idx_b - 1]
-            local pt_c = pts[idx_b + 1]
-            local pt_h = pts[total]
-
-            local acx, acz = pt_c.x - pt_a.x, pt_c.z - pt_a.z
-            local ac_len = math.sqrt(acx * acx + acz * acz)
-            local ahx, ahz = pt_h.x - pt_a.x, pt_h.z - pt_a.z
-            local ah_len = math.sqrt(ahx * ahx + ahz * ahz)
-
-            local abx, abz = pt_b.x - pt_a.x, pt_b.z - pt_a.z
-            local bcx, bcz = pt_c.x - pt_b.x, pt_c.z - pt_b.z
-            local l_ab = math.sqrt(abx * abx + abz * abz)
-            local l_bc = math.sqrt(bcx * bcx + bcz * bcz)
-            local cos_turn = (l_ab > 0.05 and l_bc > 0.05) and ((abx * bcx + abz * bcz) / (l_ab * l_bc)) or 1.0
-
-            local perp_local = (ac_len > 0.05) and (math.abs(abx * acz - abz * acx) / ac_len) or 0.0
-            local perp_wide  = (ah_len > 0.10) and (math.abs(abx * ahz - abz * ahx) / ah_len) or 0.0
-
-            if perp_local <= 0.38 and perp_wide <= 0.42 and cos_turn > -0.15 and ac_len <= 32.0 and (pt_c.t - pt_a.t) <= 65000 then
-                table.remove(pts, idx_b)
-            else
-                pt_b.landmark = true
-            end
-        end
-    end
-
+    -- Pure append: NEVER overwrites pts[n] and NEVER removes older vertices!
+    pts[n + 1] = { x = pos.x, y = pos.y, z = pos.z, ix = ix, iz = iz, t = tg, w = base_w }
     return true
 end
 
@@ -647,83 +621,106 @@ local function update_campfire_snow_melt(tg)
     end
 end
 
--- 4. Dual-Scale Bit-Exact Anchor + Delta Stream Packer (100% Camera-Rotation-Invariant + 3DSS Sniper Priority!)
-local function calc_chain_stream_cost(nodes, start_idx)
-    local count = #nodes - start_idx + 1
-    if count < 2 then return 0 end
-    local cost = 2 -- First node is always a 2-float Anchor
-    local prev_ix, prev_iz = nodes[start_idx].ix, nodes[start_idx].iz
-    for i = start_idx + 1, #nodes do
-        local nd = nodes[i]
-        local dx = nd.ix - prev_ix
-        local dz = nd.iz - prev_iz
-        local adx, adz = math.abs(dx), math.abs(dz)
-        if adx == 0 and adz == 0 then
-            -- duplicate cell skipped
-        elseif adx <= 63 and adz <= 63 then
-            cost = cost + 1
-            prev_ix, prev_iz = nd.ix, nd.iz
-        elseif adx <= 378 and adz <= 378 then
-            local dx6 = clamp_val(math.floor(dx / 6.0 + 0.5), -63, 63)
-            local dz6 = clamp_val(math.floor(dz / 6.0 + 0.5), -63, 63)
+-- 4. 23-Bit DualStep Stream Packer (2 Immutable Steps per Float + Smooth Zero-Pop Tail Taper + Zero Rubber-Banding!)
+local function build_chain_floats(nodes, start_idx)
+    local total = #nodes
+    if total - start_idx < 1 then return nil end
+
+    -- Smooth tail taper ONLY when a very long chain exceeds its float window (prevents 100%->0% tail pop!)
+    local tapered = (start_idx > 1)
+    local function node_s(k)
+        local base_s = nodes[k].s
+        if not tapered then return base_s end
+        local rel = k - start_idx -- 0, 1, 2, 3...
+        if rel == 0 then return math.min(base_s, 0.03)
+        elseif rel == 1 then return math.min(base_s, 0.34)
+        elseif rel == 2 then return math.min(base_s, 0.68)
+        elseif rel == 3 then return math.min(base_s, 0.90)
+        end
+        return base_s
+    end
+
+    local out = {}
+    local first = nodes[start_idx]
+    local a0, a1 = encode_anchor_floats(first.ix, first.iz, node_s(start_idx))
+    out[1], out[2] = a0, a1
+    local prev_ix, prev_iz = first.ix, first.iz
+
+    local i = start_idx + 1
+    while i <= total do
+        local nd1 = nodes[i]
+        local dx1 = nd1.ix - prev_ix
+        local dz1 = nd1.iz - prev_iz
+        local adx1, adz1 = math.abs(dx1), math.abs(dz1)
+
+        if adx1 == 0 and adz1 == 0 then
+            i = i + 1
+        elseif adx1 <= 11 and adz1 <= 11 and (i + 1) <= total then
+            local nd2 = nodes[i + 1]
+            local dx2 = nd2.ix - nd1.ix
+            local dz2 = nd2.iz - nd1.iz
+            local adx2, adz2 = math.abs(dx2), math.abs(dz2)
+            if (adx2 ~= 0 or adz2 ~= 0) and adx2 <= 11 and adz2 <= 11 then
+                -- Pack TWO consecutive immutable steps into ONE float!
+                out[#out + 1] = encode_dual_delta_float(dx1, dz1, dx2, dz2, node_s(i + 1))
+                prev_ix, prev_iz = nd2.ix, nd2.iz
+                i = i + 2
+            else
+                out[#out + 1] = encode_delta_float(dx1, dz1, node_s(i), false)
+                prev_ix, prev_iz = nd1.ix, nd1.iz
+                i = i + 1
+            end
+        elseif adx1 <= 63 and adz1 <= 63 then
+            out[#out + 1] = encode_delta_float(dx1, dz1, node_s(i), false)
+            prev_ix, prev_iz = nd1.ix, nd1.iz
+            i = i + 1
+        elseif adx1 <= 378 and adz1 <= 378 then
+            local dx6 = clamp_val(math.floor(dx1 / 6.0 + 0.5), -63, 63)
+            local dz6 = clamp_val(math.floor(dz1 / 6.0 + 0.5), -63, 63)
             if dx6 ~= 0 or dz6 ~= 0 then
-                cost = cost + 1
+                out[#out + 1] = encode_delta_float(dx6, dz6, node_s(i), true)
                 prev_ix = clamp_val(prev_ix + dx6 * 6, 0, 16383)
                 prev_iz = clamp_val(prev_iz + dz6 * 6, 0, 16383)
             end
+            i = i + 1
         else
-            cost = cost + 2
-            prev_ix, prev_iz = nd.ix, nd.iz
+            local b0, b1 = encode_anchor_floats(nd1.ix, nd1.iz, node_s(i))
+            out[#out + 1] = b0
+            out[#out + 1] = b1
+            prev_ix, prev_iz = nd1.ix, nd1.iz
+            i = i + 1
         end
     end
-    return cost
+    return out
+end
+
+local function calc_chain_stream_cost(nodes, start_idx)
+    local fl = build_chain_floats(nodes, start_idx)
+    return fl and #fl or 0
 end
 
 local function emit_chain_to_stream(stream, nodes, max_floats)
     local total = #nodes
     if total < 2 or max_floats < 3 then return end
 
-    local start_idx = total - 1
-    for candidate = 1, total - 1 do
-        if calc_chain_stream_cost(nodes, candidate) <= max_floats then
-            start_idx = candidate
+    -- Step candidate by +2 (odd indices 1, 3, 5...) first so DualStep pairing parity NEVER flips as a chain grows!
+    local best_fl = nil
+    for candidate = 1, total - 1, 2 do
+        local fl = build_chain_floats(nodes, candidate)
+        if fl and #fl <= max_floats then
+            best_fl = fl
             break
         end
     end
-    if calc_chain_stream_cost(nodes, start_idx) > max_floats then
-        return
-    end
-
-    local first = nodes[start_idx]
-    local a0, a1 = encode_anchor_floats(first.ix, first.iz, first.s)
-    stream[#stream + 1] = a0
-    stream[#stream + 1] = a1
-    local prev_ix, prev_iz = first.ix, first.iz
-
-    for i = start_idx + 1, total do
-        local nd = nodes[i]
-        local dx = nd.ix - prev_ix
-        local dz = nd.iz - prev_iz
-        local adx, adz = math.abs(dx), math.abs(dz)
-        if adx ~= 0 or adz ~= 0 then
-            if adx <= 63 and adz <= 63 then
-                stream[#stream + 1] = encode_delta_float(dx, dz, nd.s, false)
-                prev_ix, prev_iz = nd.ix, nd.iz
-            elseif adx <= 378 and adz <= 378 then
-                local dx6 = clamp_val(math.floor(dx / 6.0 + 0.5), -63, 63)
-                local dz6 = clamp_val(math.floor(dz / 6.0 + 0.5), -63, 63)
-                if dx6 ~= 0 or dz6 ~= 0 then
-                    stream[#stream + 1] = encode_delta_float(dx6, dz6, nd.s, true)
-                    prev_ix = clamp_val(prev_ix + dx6 * 6, 0, 16383)
-                    prev_iz = clamp_val(prev_iz + dz6 * 6, 0, 16383)
-                end
-            elseif (#stream + 2) <= MAX_STREAM_FLOATS then
-                local b0, b1 = encode_anchor_floats(nd.ix, nd.iz, nd.s)
-                stream[#stream + 1] = b0
-                stream[#stream + 1] = b1
-                prev_ix, prev_iz = nd.ix, nd.iz
-            end
+    if not best_fl then
+        local fl = build_chain_floats(nodes, total - 1)
+        if fl and #fl <= max_floats then
+            best_fl = fl
         end
+    end
+    if not best_fl then return end
+    for k = 1, #best_fl do
+        stream[#stream + 1] = best_fl[k]
     end
 end
 
@@ -731,9 +728,9 @@ push_fast_uniforms = function()
     if not get_console then return end
     if is_underground_level() then
         exec_cached("sp2", "shader_param_2 0.000,0.000,0.00000,0.00000")
-        exec_cached("cf1_lo", "r4_hdr10_bloom_blur_scale 0.9200000000")
-        exec_cached("cf2_lo", "r4_hdr10_bloom_intensity 0.9200000000")
-        exec_cached("cf_hi",  "heat_vision_blurring 0.5000,0.5000,0.9200000000,0.0")
+        exec_cached("cf1_lo", "r4_hdr10_bloom_blur_scale 0.9500000000")
+        exec_cached("cf2_lo", "r4_hdr10_bloom_intensity 0.9500000000")
+        exec_cached("cf_hi",  "heat_vision_blurring 0.5000,0.5000,0.9500000000,0.9500000000")
         exec_cached("wpn_snow", "r4_hdr10_sun_intensity 1.0000")
         return
     end
@@ -759,7 +756,7 @@ push_fast_uniforms = function()
     exec_cached("sp2",    string.format("shader_param_2 %.3f,%.3f,%.5f,%.5f", freeze_f, snow_accum, cf1_r, cf2_r))
     exec_cached("cf1_lo", string.format("r4_hdr10_bloom_blur_scale %.10f", cf1_lo))
     exec_cached("cf2_lo", string.format("r4_hdr10_bloom_intensity %.10f", cf2_lo))
-    exec_cached("cf_hi",  string.format("heat_vision_blurring %.4f,%.4f,%.10f,0.0", npc_s, obj_s, cf_hi))
+    exec_cached("cf_hi",  string.format("heat_vision_blurring %.4f,%.4f,%.10f,%.10f", npc_s, obj_s, cf_hi, last_raw38_val))
     exec_cached("wpn_snow", string.format("r4_hdr10_sun_intensity %.4f", wpn_val))
 end
 
@@ -811,27 +808,14 @@ local function push_trail_fullmap_uniforms(tg)
                     local pts = ch.pts
                     local total_pts = #pts
 
-                    -- Live boot tip for BOTH Player AND walking NPCs/Mutants so trenches connect right under their boots!
-                    local live_pt = nil
-                    if c_i == #chains and not ch.closed and total_pts >= 1 then
-                        local cand = (actor_id == PLAYER_TRAIL_ID) and player_live_head or entity_live_pos[actor_id]
-                        if cand and (tg - cand.t) <= 3500 then
-                            local lp = pts[total_pts]
-                            local ldx = cand.x - lp.x
-                            local ldz = cand.z - lp.z
-                            if (ldx * ldx + ldz * ldz) >= 0.0324 and (cand.ix ~= lp.ix or cand.iz ~= lp.iz) then
-                                live_pt = cand
-                            end
-                        end
-                    end
-
-                    local count_with_live = total_pts + (live_pt and 1 or 0)
                     local cur_nodes = {}
                     local min_d2_actor = 999999999.0
                     local newest_t = 0
 
-                    for p_i = 1, count_with_live do
-                        local pt = (p_i <= total_pts) and pts[p_i] or live_pt
+                    -- Pure committed, immutable nodes ONLY (ZERO swaying live_pt rubber-banding on moving NPCs!):
+                    -- Every segment in `pts` is frozen in the snow the instant it is stamped and NEVER wiggles or reshapes!
+                    for p_i = 1, total_pts do
+                        local pt = pts[p_i]
                         if math.abs(pt.x) <= 1595.0 and math.abs(pt.z) <= 1595.0 then
                             local str = eval_node_strength(pt, tg, ttl_sec)
                             if str > 0.02 then
@@ -866,11 +850,10 @@ local function push_trail_fullmap_uniforms(tg)
 
                     if #cur_nodes >= 2 then
                         local best_score = min_d2_actor
-                        -- Strong sticky hysteresis (0.42x) guarantees zero swapping between similarly-distanced NPCs!
                         if ch.uid and active_gpu_chains[ch.uid] then
                             best_score = best_score * 0.42
                         end
-                        local entry = { uid = ch.uid, nodes = cur_nodes, score = best_score, newest_t = newest_t }
+                        local entry = { uid = ch.uid, nodes = cur_nodes, score = best_score, raw_d2 = min_d2_actor, newest_t = newest_t }
                         if ch.is_player then
                             player_subs[#player_subs + 1] = entry
                         else
@@ -881,31 +864,18 @@ local function push_trail_fullmap_uniforms(tg)
             end
         end
 
-        -- Guarantee any distant Stalker/Mutant under your 3DSS/optic crosshair gets top NPC priority!
-        if is_ads and best_sniper_uid then
-            for i = 1, #npc_subs do
-                if npc_subs[i].uid == best_sniper_uid then
-                    npc_subs[i].score = -1.0
-                    break
-                end
-            end
-        end
-
         table.sort(player_subs, function(a, b) return a.newest_t > b.newest_t end)
         table.sort(npc_subs, function(a, b) return a.score < b.score end)
 
-        -- Guaranteed minimum 14 floats (~160-250m consolidated trail!) for the Player; camera-invariant NPC reserve!
-        local npc_floats_wanted = 0
-        for i = 1, math.min(#npc_subs, 5) do
-            local cost = calc_chain_stream_cost(npc_subs[i].nodes, 1)
-            npc_floats_wanted = npc_floats_wanted + math.min(cost, 7)
+        local npc_by_uid = {}
+        for i = 1, #npc_subs do
+            local e = npc_subs[i]
+            if e.uid then npc_by_uid[e.uid] = e end
         end
-        local npc_reserve = math.min(npc_floats_wanted, MAX_STREAM_FLOATS - 14)
-        local player_cap = MAX_STREAM_FLOATS - npc_reserve
 
-        -- 1. Emit Player trail(s)
+        -- 1. Emit Player Partition (strictly capped at PLAYER_FIXED_CAP = 11 floats; NEVER steals from NPCs/Mutants!)
         for i = 1, #player_subs do
-            local rem = player_cap - #stream
+            local rem = PLAYER_FIXED_CAP - #stream
             if rem < 3 then break end
             local before = #stream
             emit_chain_to_stream(stream, player_subs[i].nodes, rem)
@@ -914,19 +884,56 @@ local function push_trail_fullmap_uniforms(tg)
             end
         end
 
-        -- 2. Emit up to 6 simultaneous NPC & Mutant trails across the map (50-150m+ each via consolidated landmarks!)
-        for i = 1, #npc_subs do
-            local rem = MAX_STREAM_FLOATS - #stream
-            if rem < 3 then break end
-            local remaining_npcs = #npc_subs - i
-            local per_npc_cap = rem
-            if remaining_npcs >= 1 and rem >= 7 then
-                per_npc_cap = math.min(rem - 3, 8)
+        -- 2. Update & Emit 4 PINNED NPC / Mutant Slots (fixed caps {8, 7, 6, 6} = 27 floats):
+        --    Once a chain is pinned in a slot, walking forward/backward within 75m NEVER evicts it and NEVER changes its cap!
+        local used_uids = {}
+        for s = 1, NUM_NPC_SLOTS do
+            local uid = pinned_npc_uids[s]
+            local entry = uid and npc_by_uid[uid] or nil
+            -- Keep pinned as long as snow hasn't expired and chain is within 75m of player (d2 <= 5625)
+            if entry and entry.raw_d2 <= 5625.0 and not used_uids[uid] then
+                used_uids[uid] = true
+            else
+                pinned_npc_uids[s] = nil
             end
-            local before = #stream
-            emit_chain_to_stream(stream, npc_subs[i].nodes, per_npc_cap)
-            if #stream > before and npc_subs[i].uid then
-                new_active_chains[npc_subs[i].uid] = true
+        end
+
+        -- Dedicated 3DSS / Sniper Scope override on Slot 4 ONLY when actively aiming at an unpinned distant target!
+        if is_ads and best_sniper_uid and npc_by_uid[best_sniper_uid] and not used_uids[best_sniper_uid] then
+            if pinned_npc_uids[4] then
+                used_uids[pinned_npc_uids[4]] = nil
+            end
+            pinned_npc_uids[4] = best_sniper_uid
+            used_uids[best_sniper_uid] = true
+        end
+
+        -- Fill any genuinely empty slots (nil) with the closest unpinned NPC/Mutant chains
+        for s = 1, NUM_NPC_SLOTS do
+            if not pinned_npc_uids[s] then
+                for i = 1, #npc_subs do
+                    local cand = npc_subs[i]
+                    if cand.uid and not used_uids[cand.uid] then
+                        pinned_npc_uids[s] = cand.uid
+                        used_uids[cand.uid] = true
+                        break
+                    end
+                end
+            end
+        end
+
+        -- Emit each pinned slot with its OWN STRICT FIXED CAP (NPC_SLOT_CAPS[s]) so trails NEVER shrink or morph!
+        for s = 1, NUM_NPC_SLOTS do
+            local uid = pinned_npc_uids[s]
+            local entry = uid and npc_by_uid[uid] or nil
+            if entry then
+                local slot_cap = math.min(NPC_SLOT_CAPS[s], MAX_STREAM_FLOATS - #stream)
+                if slot_cap >= 3 then
+                    local before = #stream
+                    emit_chain_to_stream(stream, entry.nodes, slot_cap)
+                    if #stream > before then
+                        new_active_chains[uid] = true
+                    end
+                end
             end
         end
     end
@@ -935,7 +942,7 @@ local function push_trail_fullmap_uniforms(tg)
 
     local raw = {}
     for i = 1, MAX_STREAM_FLOATS do
-        raw[i] = stream[i] or 0.92
+        raw[i] = stream[i] or END_STREAM_MARKER
     end
 
     for i = 1, 22 do
@@ -948,6 +955,10 @@ local function push_trail_fullmap_uniforms(tg)
     exec_cached("raw_26_29", string.format("heat_vision_steps %.10f,%.10f,%.10f,%.10f", raw[26], raw[27], raw[28], raw[29]))
     exec_cached("raw_30_33", string.format("heat_vision_args_1 %.10f,%.10f,%.10f,%.10f", raw[30], raw[31], raw[32], raw[33]))
     exec_cached("raw_34_37", string.format("heat_vision_args_2 %.10f,%.10f,%.10f,%.10f", raw[34], raw[35], raw[36], raw[37]))
+    if raw[38] ~= last_raw38_val then
+        last_raw38_val = raw[38]
+        push_fast_uniforms()
+    end
 end
 
 -- Particle helpers (safe across level transitions and on both Project INVERNO and standalone setups!)
@@ -1006,7 +1017,14 @@ local function update_player_trail(tg)
     end
 
     local apos = db.actor:position()
-    local valid_snow = (not is_actor_indoors()) and (not is_inside_melted_campfire_zone(apos))
+    local melted = is_inside_melted_campfire_zone(apos)
+    local indoors = is_actor_indoors()
+    if indoors then
+        player_indoor_streak = player_indoor_streak + 1
+    else
+        player_indoor_streak = 0
+    end
+    local valid_snow = (player_indoor_streak < 3) and (not melted)
 
     if not valid_snow then
         player_live_head = nil
@@ -1320,6 +1338,8 @@ local function release_level_pools()
     entity_strength_cache = {}
     entity_chain_active   = {}
     active_gpu_chains     = {}
+    pinned_npc_uids       = { nil, nil, nil, nil }
+    player_indoor_streak  = 0
     cmd_cache             = {}
 end
 
