@@ -168,14 +168,14 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 	cf2_wpos = 0.0f; cf2_ok = false;
 
 	float f_hi = heatvision_params2.z;
-	if (f_hi < 0.49f || f_hi >= 0.99999994f)
+	if (f_hi < 0.49f || f_hi >= 0.89f)
 		return false;
 
 	uint hi_code = (uint)floor((f_hi - 0.5f) * 8388608.0f + 0.5f);
 	uint m1 = hi_code & 1023u;         // bit 9 = active1, bits 0..8 = ix1_hi9
 	uint m2 = (hi_code >> 10u) & 1023u; // bit 9 = active2, bits 0..8 = ix2_hi9
 
-	if (((m1 >> 9u) & 1u) != 0u && hdr10_parameters4.y >= 0.49f && hdr10_parameters4.y < 0.99999994f)
+	if (((m1 >> 9u) & 1u) != 0u && hdr10_parameters4.y >= 0.49f && hdr10_parameters4.y < 0.89f)
 	{
 		uint lo1 = (uint)floor((hdr10_parameters4.y - 0.5f) * 16777216.0f + 0.5f);
 		uint iz1 = lo1 & 65535u;
@@ -184,7 +184,7 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 		cf1_ok = true;
 	}
 
-	if (((m2 >> 9u) & 1u) != 0u && hdr10_parameters4.z >= 0.49f && hdr10_parameters4.z < 0.99999994f)
+	if (((m2 >> 9u) & 1u) != 0u && hdr10_parameters4.z >= 0.49f && hdr10_parameters4.z < 0.89f)
 	{
 		uint lo2 = (uint)floor((hdr10_parameters4.z - 0.5f) * 16777216.0f + 0.5f);
 		uint iz2 = lo2 & 65535u;
@@ -200,7 +200,7 @@ float dynsnow_seg_dist(float2 p_w, float2 a_w, float2 b_w, out float along_t)
 {
 	float2 ba = b_w - a_w;
 	float len2 = dot(ba, ba);
-	if (len2 > 225.0f) // Segments are true walked segments (<= 15m), never shortcuts across walls!
+	if (len2 > 6400.0f) // Supports consolidated straight landmark segments up to 80m across the map!
 	{
 		float da = length(p_w - a_w);
 		float db = length(p_w - b_w);
@@ -216,8 +216,8 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 {
 	ctx.has_trench = false;
 	ctx.has_cf = false;
-	// Perspective-conserving anti-aliasing width boost so distant snow trenches (50m..1000m) always span >= 1.5-2 pixels cleanly!
-	ctx.width_boost = 1.0f + clamp((dist_z - 25.0f) * 0.0095f, 0.0f, 3.6f);
+	// Tuned for 720p-1440p & grazing hillside angles so distant trails (50m..1500m) span >= 2 crisp pixels without vanishing!
+	ctx.width_boost = 1.0f + clamp((dist_z - 16.0f) * 0.0165f, 0.0f, 5.4f);
 	ctx.seg_count = 0;
 	ctx.seg0_a = 0.0f; ctx.seg0_b = 0.0f; ctx.seg0_w = 0.0f;
 	ctx.seg1_a = 0.0f; ctx.seg1_b = 0.0f; ctx.seg1_w = 0.0f;
@@ -264,7 +264,7 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 		}
 	}
 
-	// 2. Unpack 37-float Bit-Exact Hybrid Anchor + Delta Stream (up to 35 connected segments across 3.2km x 3.2km!)
+	// 2. Unpack 37-float Dual-Scale Hybrid Anchor + Delta Stream (3.2km x 3.2km, up to 73.8m per 1-float landmark!)
 	float raw[37] = {
 		hdr10_parameters3.x, hdr10_parameters3.y, hdr10_parameters3.z,
 		hdr10_parameters3.w, hdr10_parameters5.x, hdr10_parameters5.y,
@@ -294,29 +294,31 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 	[loop] while (idx < 37)
 	{
 		float f = raw[idx];
-		if (f < 0.35f)
-			break; // End-of-stream marker (0.25f)
+		// End-of-stream marker is 0.92f (-0.08f on sub1 slots, strictly inside all cvar min/max bounds!)
+		if (f > 0.89f || f < 0.45f)
+			break;
 
-		if (f >= 0.7499f && f < 0.82f)
+		if (f >= 0.7499f && f < 0.88f)
 		{
-			// 1-float Delta Node (exact 19.5cm grid step relative to prev_ix, prev_iz)
+			// 1-float Dual-Scale Delta Node (bit 19 = 0: 19.5cm step; bit 19 = 1: 6x = 1.17m landmark step up to +-73.8m!)
 			idx += 1;
 			if (!has_prev)
 				continue;
 
 			uint code = (uint)floor((f - 0.5f) * 8388608.0f + 0.5f);
 			uint payload = code - 2097152u;
-			int dz = (int)(payload & 127u) - 64;
-			int dx = (int)((payload >> 7u) & 127u) - 64;
+			int dz_step = (int)(payload & 127u) - 64;
+			int dx_step = (int)((payload >> 7u) & 127u) - 64;
 			uint ist = (payload >> 14u) & 31u;
+			int mult = (((payload >> 19u) & 1u) != 0u) ? 6 : 1;
 			if (ist == 0u)
 			{
 				has_prev = false;
 				continue;
 			}
 
-			int cur_ix = clamp(prev_ix + dx, 0, 16383);
-			int cur_iz = clamp(prev_iz + dz, 0, 16383);
+			int cur_ix = clamp(prev_ix + dx_step * mult, 0, 16383);
+			int cur_iz = clamp(prev_iz + dz_step * mult, 0, 16383);
 			float2 cur_pos = float2(
 				-DYNSNOW_WORLD_HALF + ((float)cur_ix + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
 				-DYNSNOW_WORLD_HALF + ((float)cur_iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)

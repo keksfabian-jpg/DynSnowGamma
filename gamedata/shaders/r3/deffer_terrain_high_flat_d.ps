@@ -206,7 +206,7 @@ f_deffer main(p_bumped I)
 
 	float raw_pmask = s_puddles_mask.Sample(smp_base, I.tcdh).r;
 	float PuddlesMask = (raw_pmask > 0.98f) ? 1.0f : (1.0f - raw_pmask);
-	float3 N = normalize(mul(m_inv_V, Nw));
+	float3 N = normalize(mul(m_inv_V, float4(Nw, 0.0f)).xyz);
 	float SlopeMask = saturate((1.0f - max(abs(N.x), abs(N.z))) - 0.9f) * 13.0f;
 	puddles *= SlopeMask * PuddlesMask * 0.55f;
 
@@ -249,24 +249,26 @@ f_deffer main(p_bumped I)
 
 	[branch] if (snow_accum > 0.001f)
 	{
-		float3 wpos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
-		float3 rel_cam_w = mul((float3x3)m_inv_V, I.position.xyz);
-		float3 world_ray = normalize(rel_cam_w);
-		float2 world_ray_step_xz = (world_ray.xz / max(abs(world_ray.y), 0.25f)) * (0.24f / 8.0f) * dist_att;
+		// Exact camera-independent world position (hardware-interpolated from VS when available, exact m_inv_V fallback)
+		float3 wpos = (I.sss_extra.w > 0.5f) ? I.sss_extra.xyz : mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
 
 		float snow_slope = saturate((N.y - G_TERRAIN_SNOW_SLOPE) / (1.0f - G_TERRAIN_SNOW_SLOPE));
 		float snow_weight = saturate(snow_slope * snow_accum * G_TERRAIN_SNOW_STRENGTH);
 
+		// Lock trenches & campfires strictly to exact ground world-space wpos.xz (ZERO view-angle/camera-rotation shift!)
 		DynSnowContext ctx;
 		dynsnow_init_context(wpos.xz, I.position.z, ctx);
 
-		float2 pom_tc = I.tcdbump * 1.15f;
-		float2 hit_wxz = wpos.xz - world_ray_step_xz * 4.0f;
-		float pom_h = 0.0f;
-		DynSnowParallax(ctx, tc_step, _step, pom_tc, hit_wxz, pom_h, I.position.z, world_ray_step_xz, mask, snow_weight);
-
 		float trench, berm, cf_melt, cf_slush;
-		dynsnow_eval_cached(ctx, hit_wxz, trench, berm, cf_melt, cf_slush);
+		dynsnow_eval_cached(ctx, wpos.xz, trench, berm, cf_melt, cf_slush);
+
+		// Subtle surface grain parallax ONLY on snow blanket UV (zero world_ray_step_xz offset on trench coordinates!)
+		float2 pom_tc = I.tcdbump * 1.15f;
+		float2 dummy_wxz = wpos.xz;
+		float pom_h = 0.0f;
+		DynSnowContext blanket_ctx = (DynSnowContext)0;
+		DynSnowParallax(blanket_ctx, tc_step * 0.45f, _step, pom_tc, dummy_wxz, pom_h, I.position.z, float2(0.0f, 0.0f), mask, snow_weight);
+		pom_h = saturate(pom_h * (1.0f - trench * 0.92f) + berm * 0.26f) * (1.0f - cf_melt);
 
 		float2 warp = s_puddles_normal.Sample(smp_base, pom_tc * 0.09f).xy * 0.30f;
 		float2 w_uv = pom_tc + warp;
@@ -288,18 +290,18 @@ f_deffer main(p_bumped I)
 			float eps = 0.06f * ctx.width_boost;
 			float tx1, bx1, cm1, cs1;
 			float tz1, bz1, cm2, cs2;
-			dynsnow_eval_cached(ctx, hit_wxz + float2(eps, 0.0f), tx1, bx1, cm1, cs1);
-			dynsnow_eval_cached(ctx, hit_wxz + float2(0.0f, eps), tz1, bz1, cm2, cs2);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(eps, 0.0f), tx1, bx1, cm1, cs1);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, eps), tz1, bz1, cm2, cs2);
 			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
 			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
 			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
-			world_snow_up = normalize(float3((h0 - hx) * 3.8f, 1.0f, (h0 - hz) * 3.8f));
+			world_snow_up = normalize(float3((h0 - hx) * 4.2f, 1.0f, (h0 - hz) * 4.2f));
 		}
 
 		float3 snow_local_n = normalize(float3(n_macro + n_medium + n_fine, 1.0f));
 		float3 snow_view_n = normalize(mul(float3x3(I.M1, I.M2, I.M3), snow_local_n));
-		float3 trench_view_n = normalize(mul((float3x3)m_V, world_snow_up));
-		snow_view_n = normalize(lerp(snow_view_n, trench_view_n, saturate(trench * 0.85f + berm * 0.80f + cf_slush * 0.65f)));
+		float3 trench_view_n = normalize(mul(m_V, float4(world_snow_up, 0.0f)).xyz);
+		snow_view_n = normalize(lerp(snow_view_n, trench_view_n, saturate(trench * 0.88f + berm * 0.82f + cf_slush * 0.65f)));
 
 		float snow_ao = smoothstep(0.15f, 0.88f, drift_h) * (1.0f - trench * 0.75f) + berm * 0.18f;
 		float3 snow_shadow_color = float3(0.58f, 0.70f, 0.88f);

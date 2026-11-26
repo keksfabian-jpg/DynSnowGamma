@@ -64,7 +64,7 @@ f_deffer main(p_flat I)
 	float snow_accum = dynsnow_get_terrain_snow_accum();
 
 	float3 N1 = mul(float3x3(I.M1, I.M2, I.M3), float3(0, 0, 1));
-	float3 N2 = normalize(mul(m_inv_V, normalize(N1)));
+	float3 N2 = normalize(mul(m_inv_V, float4(normalize(N1), 0.0f)).xyz);
 
 	float4 dt = s_dt_r.Sample(smp_base, I.tcdbump) * mask.r
 	          + s_dt_g.Sample(smp_base, I.tcdbump) * mask.g
@@ -124,8 +124,9 @@ f_deffer main(p_flat I)
 			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
 			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
 			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
-			float3 grad_v = normalize(mul((float3x3)m_V, normalize(float3((h0 - hx) * 3.8f, 1.0f, (h0 - hz) * 3.8f))));
-			snow_view_n = normalize(lerp(snow_view_n, grad_v, saturate(trench * 0.85f + berm * 0.80f + cf_slush * 0.65f)));
+			float3 world_up_n = normalize(float3((h0 - hx) * 4.2f, 1.0f, (h0 - hz) * 4.2f));
+			float3 grad_v = normalize(mul(m_V, float4(world_up_n, 0.0f)).xyz);
+			snow_view_n = normalize(lerp(snow_view_n, grad_v, saturate(trench * 0.88f + berm * 0.82f + cf_slush * 0.65f)));
 		}
 
 		float snow_ao = smoothstep(0.15f, 0.88f, drift_h) * (1.0f - trench * 0.75f) + berm * 0.18f;
