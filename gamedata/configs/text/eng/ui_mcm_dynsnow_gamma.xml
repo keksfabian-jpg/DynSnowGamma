@@ -4,7 +4,7 @@
         <text>!DynSnow</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_title">
-        <text>DynSnow v1.2 for G.A.M.M.A.</text>
+        <text>DynSnow v1.5 for G.A.M.M.A.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_always_snow">
@@ -25,21 +25,35 @@
         <text>Weapon Frost &amp; Snow Intensity</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_weapon_snow_intensity_desc">
-        <text>Adjusts the amount of rime frost and snow crystals settling on top of your weapon (1.0 = subtle Project INVERNO look).</text>
+        <text>Adjusts the amount of rime frost and snow crystals settling on top of your 1st-person weapon (1.0 = subtle Project INVERNO look).</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_npc_snow_intensity">
+        <text>NPC &amp; Mutant Surface Snow Intensity (0.0 = Off)</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_npc_snow_intensity_desc">
+        <text>Controls surface snow accumulation on Stalkers, NPCs, and Mutants independently of world objects. Set to 0.0 to completely disable snow on characters and mutants (Default: 0.25).</text>
+    </string>
+
+    <string id="ui_mcm_dynsnow_gamma_object_snow_intensity">
+        <text>Vehicles, Roofs &amp; World Objects Snow Intensity (0.0 = Off)</text>
+    </string>
+    <string id="ui_mcm_dynsnow_gamma_object_snow_intensity_desc">
+        <text>Controls surface snow accumulation on cars, trucks, roofs, rocks, barrels, crates, and buildings independently of NPCs and mutants (0.0 = Off, 1.0 = Default, 2.0 = Heavy).</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow">
-        <text>Enable 3D Volumetric Snow Trench Deformation</text>
+        <text>Enable Full-Map 3D Volumetric Snow Trenches</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_dynsnow_desc">
-        <text>Carves real-time 3D parallax snow trenches with raised side berms that stay for 5+ minutes and gradually snow back over smoothly from start to end.</text>
+        <text>Carves real-time 3D parallax snow trenches with raised side berms visible across the entire map that stay for 5+ minutes and gradually snow back over from start to end.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks">
         <text>Enable Stalker &amp; Mutant 3D Snow Trenches</text>
     </string>
     <string id="ui_mcm_dynsnow_gamma_enable_npc_tracks_desc">
-        <text>Nearby stalkers and mutants (within 40m) carve real 3D snow trenches across the landscape that stay for 5+ minutes and slowly fill in from oldest tail to newest head.</text>
+        <text>Stalkers and mutants across the entire map carve real 3D snow trenches that stay for 5+ minutes and slowly fill in from oldest tail to newest head.</text>
     </string>
 
     <string id="ui_mcm_dynsnow_gamma_track_ttl_mult">

@@ -1,5 +1,5 @@
 -- ==============================================================================================
--- DynSnow v1.2 for S.T.A.L.K.E.R. G.A.M.M.A. - MCM Configuration Menu
+-- DynSnow v1.5 for S.T.A.L.K.E.R. G.A.M.M.A. - MCM Configuration Menu
 -- 100% Original Clean-Room Addon | License: MIT
 -- ==============================================================================================
 
@@ -8,6 +8,8 @@ local defaults = {
     ["enable_dynsnow"]        = true,
     ["enable_weapon_snow"]    = true,
     ["weapon_snow_intensity"] = 1.0,
+    ["npc_snow_intensity"]    = 0.25,
+    ["object_snow_intensity"] = 1.0,
     ["enable_npc_tracks"]     = true,
     ["enable_campfire_melt"]  = true,
     ["campfire_melt_radius"]  = 2.2,
@@ -30,6 +32,8 @@ function on_mcm_load()
             { id = "always_snow", type = "check", val = 1, def = true },
             { id = "enable_weapon_snow", type = "check", val = 1, def = true },
             { id = "weapon_snow_intensity", type = "track", val = 2, min = 0.2, max = 2.0, step = 0.1, def = 1.0 },
+            { id = "npc_snow_intensity", type = "track", val = 2, min = 0.0, max = 2.0, step = 0.05, def = 0.25 },
+            { id = "object_snow_intensity", type = "track", val = 2, min = 0.0, max = 2.0, step = 0.05, def = 1.0 },
             { id = "line1", type = "line" },
             { id = "enable_dynsnow", type = "check", val = 1, def = true },
             { id = "enable_npc_tracks", type = "check", val = 1, def = true },

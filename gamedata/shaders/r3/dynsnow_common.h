@@ -30,6 +30,9 @@ uniform float4 shader_param_2;
 #ifndef G_TERRAIN_SNOW_STRENGTH
 #define G_TERRAIN_SNOW_STRENGTH 1.25f
 #endif
+#ifndef G_ROOF_SNOW_STRENGTH
+#define G_ROOF_SNOW_STRENGTH 0.82f
+#endif
 #ifndef G_TERRAIN_SNOW_SLOPE
 #define G_TERRAIN_SNOW_SLOPE 0.38f
 #endif
@@ -452,6 +455,24 @@ void dynsnow_apply_hud_snow(
 	float melt_wet = saturate(1.0f - abs(wpn_snow - 0.18f) * 5.5f) * top_mask * surface_elig;
 	gloss = lerp(gloss, 0.16f + n_speck * 0.22f, total_mask * 0.65f);
 	gloss = max(gloss, melt_wet * 0.36f);
+}
+
+// Separate live MCM multipliers for Skinned Characters (NPCs & Mutants) vs World Objects (Cars, Roofs, Props)
+// Encoded in heatvision_params2.xy as (0.50 + slider_value) in [0.50 .. 2.50]; > 3.5f = uninitialized user.ltx default
+float dynsnow_get_model_snow_mult(bool is_skinned_npc_or_mutant)
+{
+	if (is_skinned_npc_or_mutant)
+	{
+		if (heatvision_params2.x > 3.5f || heatvision_params2.x < 0.45f)
+			return 0.25f;
+		return max(0.0f, heatvision_params2.x - 0.50f);
+	}
+	else
+	{
+		if (heatvision_params2.y > 3.5f || heatvision_params2.y < 0.45f)
+			return 1.00f;
+		return max(0.0f, heatvision_params2.y - 0.50f);
+	}
 }
 
 #endif

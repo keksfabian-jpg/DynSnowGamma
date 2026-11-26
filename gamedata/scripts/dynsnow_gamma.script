@@ -87,6 +87,8 @@ local cfg_always_snow       = true
 local cfg_enable_dynsnow    = true
 local cfg_weapon_snow       = true
 local cfg_weapon_snow_int   = 1.0
+local cfg_npc_snow_int      = 0.25
+local cfg_object_snow_int   = 1.0
 local cfg_enable_npc_tracks = true
 local cfg_campfire_melt     = true
 local cfg_campfire_max_r    = 2.2
@@ -199,6 +201,10 @@ local function sync_mcm(tg)
         cfg_always_snow       = dynsnow_gamma_mcm.get_config("always_snow") ~= false
         cfg_weapon_snow       = dynsnow_gamma_mcm.get_config("enable_weapon_snow") ~= false
         cfg_weapon_snow_int   = dynsnow_gamma_mcm.get_config("weapon_snow_intensity") or 1.0
+        local ns = dynsnow_gamma_mcm.get_config("npc_snow_intensity")
+        cfg_npc_snow_int      = (ns ~= nil) and ns or 0.25
+        local os_val = dynsnow_gamma_mcm.get_config("object_snow_intensity")
+        cfg_object_snow_int   = (os_val ~= nil) and os_val or 1.0
         cfg_enable_dynsnow    = dynsnow_gamma_mcm.get_config("enable_dynsnow") ~= false
         cfg_enable_npc_tracks = dynsnow_gamma_mcm.get_config("enable_npc_tracks") ~= false
         cfg_campfire_melt     = dynsnow_gamma_mcm.get_config("enable_campfire_melt") ~= false
@@ -581,7 +587,7 @@ local function push_fast_uniforms()
         exec_cached("sp2", "shader_param_2 0.000,0.000,0.00000,0.00000")
         exec_cached("cf1_lo", "r4_hdr10_bloom_blur_scale 0.2500000000")
         exec_cached("cf2_lo", "r4_hdr10_bloom_intensity 0.2500000000")
-        exec_cached("cf_hi",  "heat_vision_blurring 0.25,0.25,0.2500000000,0.0")
+        exec_cached("cf_hi",  "heat_vision_blurring 0.5000,0.5000,0.2500000000,0.0")
         exec_cached("wpn_snow", "r4_hdr10_sun_intensity 1.0000")
         return
     end
@@ -599,11 +605,13 @@ local function push_fast_uniforms()
     local cf2_r = (cfg_campfire_melt and active_cf2_pos) and active_cf2_r or 0.0
     local cf1_lo, cf2_lo, cf_hi = encode_fullmap_campfires(active_cf1_pos, cf1_r, active_cf2_pos, cf2_r)
     local wpn_val = 1.0 + (cfg_weapon_snow and clamp_val(weapon_snow_amount * cfg_weapon_snow_int, 0.0, 2.0) or 0.0)
+    local npc_s = 0.50 + clamp_val(cfg_npc_snow_int, 0.0, 2.0)
+    local obj_s = 0.50 + clamp_val(cfg_object_snow_int, 0.0, 2.0)
 
     exec_cached("sp2",    string.format("shader_param_2 1.000,%.3f,%.5f,%.5f", snow_accum, cf1_r, cf2_r))
     exec_cached("cf1_lo", string.format("r4_hdr10_bloom_blur_scale %.10f", cf1_lo))
     exec_cached("cf2_lo", string.format("r4_hdr10_bloom_intensity %.10f", cf2_lo))
-    exec_cached("cf_hi",  string.format("heat_vision_blurring 0.25,0.25,%.10f,0.0", cf_hi))
+    exec_cached("cf_hi",  string.format("heat_vision_blurring %.4f,%.4f,%.10f,0.0", npc_s, obj_s, cf_hi))
     exec_cached("wpn_snow", string.format("r4_hdr10_sun_intensity %.4f", wpn_val))
 end
 

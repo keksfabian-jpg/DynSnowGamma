@@ -1,0 +1,96 @@
+/**
+ * @ Version: SCREEN SPACE SHADERS 23.5 + DynSnow v1.5 Separate NPC/Mutant vs Vehicle/Object Snow Control
+ * @ Description: Base & Model Shader - Flat (Separate MCM Sliders for NPCs/Mutants vs Cars/Roofs/Objects)
+ */
+
+#include "common.h"
+#include "sload.h"
+#include "check_screenspace.h"
+#ifdef SSFX_TAA
+	#include "screenspace_mvectors.h"
+#endif
+#include "settings_screenspace_PUDDLES.h"
+#include "dynsnow_common.h"
+
+float static_flat_snow_noise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0f - 2.0f * f);
+	float a = frac(sin(dot(i, float2(127.1f, 311.7f))) * 43758.5453f);
+	float b = frac(sin(dot(i + float2(1.0f, 0.0f), float2(127.1f, 311.7f))) * 43758.5453f);
+	float c = frac(sin(dot(i + float2(0.0f, 1.0f), float2(127.1f, 311.7f))) * 43758.5453f);
+	float d = frac(sin(dot(i + float2(1.0f, 1.0f), float2(127.1f, 311.7f))) * 43758.5453f);
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+f_deffer main(p_flat I)
+{
+	f_deffer O;
+
+	float3 D = tbase(I.tcdh);
+
+#ifdef USE_TDETAIL
+	D.rgb = 2.0f * D.rgb * s_detail.Sample(smp_base, I.tcdbump).rgb;
+#endif
+
+	float3 N = normalize((float3)I.N.xyz);
+	float G = def_gloss;
+
+	float ms = xmaterial;
+#ifdef USE_LM_HEMI
+	float4 lm = s_hemi.Sample(smp_rtlinear, I.lmh);
+	float h = get_hemi(lm);
+# ifdef USE_R2_STATIC_SUN
+	ms = get_sun(lm);
+# endif
+#else
+	float h = I.position.w;
+# ifdef USE_R2_STATIC_SUN
+	ms = I.tcdh.w;
+# endif
+#endif
+
+	bool is_npc_or_mutant = (I.RDrops.w > 0.5f);
+	float snow_mult = dynsnow_get_model_snow_mult(is_npc_or_mutant);
+	float snow_accum = saturate(shader_param_2.y);
+
+	[branch] if (snow_accum > 0.001f && snow_mult > 0.005f && G_ROOF_SNOW_STRENGTH > 0.001f)
+	{
+		float3 world_N = normalize(mul((float3x3)m_inv_V, N));
+		float surface_slope = saturate((world_N.y - 0.22f) / 0.78f);
+		float sky_exposure = smoothstep(0.05f, 0.28f, h);
+
+		float3 world_pos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
+		float drift_noise = static_flat_snow_noise(world_pos.xz * 1.4f + world_pos.y * 0.5f) * 0.65f
+		                  + static_flat_snow_noise(world_pos.xz * 4.2f) * 0.35f;
+
+		float tex_detail = dot(D.rgb, float3(0.33f, 0.33f, 0.33f));
+		float snow_temp_factor = smoothstep(0.0f, 1.0f, snow_accum);
+		float base_snow_potential = surface_slope * sky_exposure * (0.35f + drift_noise * 0.55f + tex_detail * 0.45f);
+		float snow_mask = smoothstep(0.06f, 0.38f, snow_temp_factor * base_snow_potential * min(snow_mult, 1.6f))
+		                * saturate(G_ROOF_SNOW_STRENGTH * 2.2f * snow_mult);
+
+		float melt_wetness = saturate(base_snow_potential - snow_mask) * (1.0f - snow_accum) * 1.35f * saturate(snow_mult);
+		D.rgb *= lerp(1.0f, 0.70f, melt_wetness);
+		G = lerp(G, max(G, 0.42f), melt_wetness);
+
+		float3 snow_shadow_tint = float3(0.75f, 0.83f, 0.95f);
+		float3 snow_shaded_color = lerp(snow_shadow_tint, G_TERRAIN_SNOW_COLOR, saturate(0.35f + drift_noise * 0.50f + tex_detail * 0.35f));
+
+		D.rgb = lerp(D.rgb, snow_shaded_color, snow_mask);
+		G = lerp(G, G_TERRAIN_SNOW_GLOSS, snow_mask);
+	}
+
+	float4 Ne = float4(N, h);
+	O = pack_gbuffer(
+		Ne,
+		float4(I.position.xyz + Ne.xyz * def_virtualh / 2.h, ms),
+		float4(D.rgb, G)
+	);
+
+#ifdef SSFX_TAA
+	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 0, 0);
+#endif
+	return O;
+}
