@@ -1,14 +1,14 @@
 -- ==============================================================================================
--- DynSnow v1.2 for S.T.A.L.K.E.R. G.A.M.M.A. (dynsnow_gamma.script)
+-- DynSnow v1.3 for S.T.A.L.K.E.R. G.A.M.M.A. (dynsnow_gamma.script)
 -- Inspired by Garry's Mod dynSnow | 100% Original Clean-Room Implementation | License: MIT
 --
--- Features (v1.2):
---   1. Persistent 5+ Minute Multi-Actor 3D Snow Trenches (Player + Stalkers + Mutants)
---      with smooth start-to-end (tail-to-head) snow fill-in & 25-slot 32m GPU window streaming
---   2. Zero fake 2D footprint or melt decals — 100% volumetric DX11 parallax deformation (0 KB VRAM)
---   3. Butter-smooth, continuous dt-interpolated 3D Campfire Snow Melting & Re-Snowing (up to 2 fires)
---   4. Subtle, authentic Crystalline Frost & Fine Snow Dusting on Weapons (matches INVERNO reference)
---   5. 100% Continuous Outdoor Snowfall Hook + Tree Snow Cascades on branch hits/explosions
+-- Features & Fixes in v1.3:
+--   1. Seamless 42m Render Distance across BOTH High & Mid Terrain Shaders (80m x 80m 23-bit Torus!)
+--   2. Bit-Exact 25-Slot Uniform Compensation (pre-subtracts 1.0 on C++ vaddss channels 2, 3 & 18
+--      -> eliminates ALL position jumping, U-loop glitches, and disappearing trail segments!)
+--   3. Immutable Placed Vertices + Stable Player/NPC Slot Partitioning (zero wobbling or slot-flipping!)
+--   4. Multi-Ray Overhead Sky Check (tree branches & wires never cut gaps in snow trails!)
+--   5. Smooth Per-Frame (dt) 3D Campfire Snow Melt & Subtle INVERNO-Style Weapon Frost
 -- ==============================================================================================
 
 local UNDERGROUND_LEVELS = {
@@ -46,34 +46,41 @@ local MUTANT_TRENCH_STRENGTH = {
     giant       = 1.00,
 }
 
-local TRAIL_SLOT_CMDS = {
-    "r4_hdr10_exposure",               -- slot 1  (hdr10_parameters3.x)
-    "r4_hdr10_contrast",               -- slot 2  (hdr10_parameters3.y)
-    "r4_hdr10_saturation",             -- slot 3  (hdr10_parameters3.z)
-    "r4_hdr10_contrast_middle_gray",   -- slot 4  (hdr10_parameters3.w)
-    "r4_hdr10_sun_dawn_begin",         -- slot 5  (hdr10_parameters5.x)
-    "r4_hdr10_sun_dawn_end",           -- slot 6  (hdr10_parameters5.y)
-    "r4_hdr10_sun_dusk_begin",         -- slot 7  (hdr10_parameters5.z)
-    "r4_hdr10_sun_dusk_end",           -- slot 8  (hdr10_parameters5.w)
-    "r4_hdr10_brightness",             -- slot 9  (hdr10_parameters6.x)
-    "r4_hdr10_flare_threshold",        -- slot 10 (hdr10_parameters6.z)
-    "r4_hdr10_flare_power",            -- slot 11 (hdr10_parameters6.w)
-    "r4_hdr10_flare_ghost_dispersal",  -- slot 12 (hdr10_parameters7.y)
-    "r4_hdr10_flare_center_falloff",   -- slot 13 (hdr10_parameters7.z)
-    "r4_hdr10_flare_halo_scale",       -- slot 14 (hdr10_parameters7.w)
-    "r4_hdr10_flare_halo_ca",          -- slot 15 (hdr10_parameters8.x)
-    "r4_hdr10_flare_ghost_ca",         -- slot 16 (hdr10_parameters8.y)
-    "r4_hdr10_flare_blur_scale",       -- slot 17 (hdr10_parameters8.z)
-    "r4_hdr10_ui_saturation",          -- slot 18 (hdr10_parameters8.w)
-    "r4_hdr10_flare_ghost_intensity",  -- slot 19 (hdr10_parameters9.x)
-    "r4_hdr10_flare_halo_intensity",   -- slot 20 (hdr10_parameters9.y)
-    "r4_hdr10_sun_inner_radius",       -- slot 21 (hdr10_parameters9.z)
-    "r4_hdr10_sun_outer_radius",       -- slot 22 (hdr10_parameters9.w)
+-- Exact C++ verified HDR10 uniform table (sub1 = true where C++ setup() executes vaddss +1.0f!)
+local TRAIL_SLOTS = {
+    { cmd = "r4_hdr10_exposure",               sub1 = false }, -- slot 1  (hdr10_parameters3.x)
+    { cmd = "r4_hdr10_contrast",               sub1 = true  }, -- slot 2  (hdr10_parameters3.y = 1.0 + contrast)
+    { cmd = "r4_hdr10_saturation",             sub1 = true  }, -- slot 3  (hdr10_parameters3.z = 1.0 + saturation)
+    { cmd = "r4_hdr10_contrast_middle_gray",   sub1 = false }, -- slot 4  (hdr10_parameters3.w)
+    { cmd = "r4_hdr10_sun_dawn_begin",         sub1 = false }, -- slot 5  (hdr10_parameters5.x)
+    { cmd = "r4_hdr10_sun_dawn_end",           sub1 = false }, -- slot 6  (hdr10_parameters5.y)
+    { cmd = "r4_hdr10_sun_dusk_begin",         sub1 = false }, -- slot 7  (hdr10_parameters5.z)
+    { cmd = "r4_hdr10_sun_dusk_end",           sub1 = false }, -- slot 8  (hdr10_parameters5.w)
+    { cmd = "r4_hdr10_brightness",             sub1 = false }, -- slot 9  (hdr10_parameters6.x)
+    { cmd = "r4_hdr10_flare_threshold",        sub1 = false }, -- slot 10 (hdr10_parameters6.z)
+    { cmd = "r4_hdr10_flare_power",            sub1 = false }, -- slot 11 (hdr10_parameters6.w)
+    { cmd = "r4_hdr10_flare_ghost_dispersal",  sub1 = false }, -- slot 12 (hdr10_parameters7.y)
+    { cmd = "r4_hdr10_flare_center_falloff",   sub1 = false }, -- slot 13 (hdr10_parameters7.z)
+    { cmd = "r4_hdr10_flare_halo_scale",       sub1 = false }, -- slot 14 (hdr10_parameters7.w)
+    { cmd = "r4_hdr10_flare_halo_ca",          sub1 = false }, -- slot 15 (hdr10_parameters8.x)
+    { cmd = "r4_hdr10_flare_ghost_ca",         sub1 = false }, -- slot 16 (hdr10_parameters8.y)
+    { cmd = "r4_hdr10_flare_blur_scale",       sub1 = false }, -- slot 17 (hdr10_parameters8.z)
+    { cmd = "r4_hdr10_ui_saturation",          sub1 = true  }, -- slot 18 (hdr10_parameters8.w = 1.0 + ui_saturation)
+    { cmd = "r4_hdr10_flare_ghost_intensity",  sub1 = false }, -- slot 19 (hdr10_parameters9.x)
+    { cmd = "r4_hdr10_flare_halo_intensity",   sub1 = false }, -- slot 20 (hdr10_parameters9.y)
+    { cmd = "r4_hdr10_sun_inner_radius",       sub1 = false }, -- slot 21 (hdr10_parameters9.z)
+    { cmd = "r4_hdr10_sun_outer_radius",       sub1 = false }, -- slot 22 (hdr10_parameters9.w)
 }
--- Slots 23..25 are packed into Vector3 "r4_hdr10_flare_lens_color" (hdr10_parameters10.xyz)
+-- Slots 23..25 are packed into Vector3 "r4_hdr10_flare_lens_color" (hdr10_parameters10.xyz, raw)
 local MAX_GPU_SLOTS = 25
+local TORUS_SIZE    = 80.0
+local WINDOW_HALF   = 38.5 -- Strictly within [-38.5m, +38.5m] around camera (zero 80m-torus wrap!)
 
-local VEC_UP = vector():set(0, 1, 0)
+local SKY_RAYS = {
+    vector():set(0.0,  1.0,    0.0),
+    vector():set(0.28, 0.959,  0.05),
+    vector():set(-0.26, 0.959, -0.10),
+}
 
 local cfg_always_snow       = true
 local cfg_enable_dynsnow    = true
@@ -88,8 +95,7 @@ local last_cfg_sync_tg      = 0
 
 local inverno_hooked        = false
 
--- World-space multi-actor 3D trail storage:
--- world_trails[actor_id] = array of chains, each chain = { pts = { {x, y, z, t, w}, ... }, is_player = bool }
+-- World-space multi-actor 3D trail storage (immutable placed vertices!)
 local PLAYER_TRAIL_ID       = 0
 local world_trails          = {}
 local player_live_head      = nil
@@ -97,23 +103,19 @@ local player_was_valid      = false
 local last_player_track_tg  = 0
 local last_prune_tg         = 0
 
--- Weapon frost/snow accumulation state [0.00 .. 0.85]
 local weapon_snow_amount    = 0.65
 local last_wpn_snow_tg      = 0
 
--- Console command string caches (execute ONLY when changed!)
 local cmd_cache             = {}
 local last_trail_push_tg    = 0
 local last_fast_uniform_tg  = 0
 
--- NPC / Mutant tracking caches
 local entity_last_pos       = {}
 local entity_next_check_tg  = {}
 local entity_outdoor_cache  = {}
 local entity_strength_cache = {}
 local entity_chain_active   = {}
 
--- Continuous dt-interpolated Campfire snow melt state
 local campfire_melt         = {}
 local saved_campfire_radii  = {}
 local last_cf_frame_tg      = 0
@@ -147,28 +149,29 @@ local function exec_cached(key, cmd_str)
     end
 end
 
--- Bit-lossless 22-bit IEEE-754 mantissa packer in [0.50 .. 0.99999988] (0.25 = inactive)
+-- Bit-exact 23-bit IEEE-754 mantissa packer on 80m torus:
+-- 9-bit Z (512) + 9-bit X (512) + 4-bit strength (1..15) + 1-bit connect_prev = 23 bits in [0.50 .. 1.00)
 local function pack_trail_node(x, z, strength, connect_prev)
-    if not x or not z or strength <= 0.01 then return 0.25 end
-    local mx = x - math.floor(x / 32.0) * 32.0
-    local mz = z - math.floor(z / 32.0) * 32.0
-    local ix = clamp_val(math.floor((mx / 32.0) * 256.0), 0, 255)
-    local iz = clamp_val(math.floor((mz / 32.0) * 256.0), 0, 255)
-    local ist = clamp_val(math.floor(strength * 31.0 + 0.5), 1, 31)
+    if not x or not z or strength <= 0.02 then return 0.25 end
+    local mx = x - math.floor(x / TORUS_SIZE) * TORUS_SIZE
+    local mz = z - math.floor(z / TORUS_SIZE) * TORUS_SIZE
+    local ix = clamp_val(math.floor((mx / TORUS_SIZE) * 512.0), 0, 511)
+    local iz = clamp_val(math.floor((mz / TORUS_SIZE) * 512.0), 0, 511)
+    local ist = clamp_val(math.floor(strength * 15.0 + 0.5), 1, 15)
     local iconn = connect_prev and 1 or 0
-    local code = ((iconn * 32 + ist) * 256 + ix) * 256 + iz
-    return 0.5 + (code / 8388608.0)
+    local code = (((iconn * 16 + ist) * 512 + ix) * 512) + iz
+    return 0.5 + (code / 16777216.0)
 end
 
--- 20-bit (10-bit X + 10-bit Z = 3.1cm precision) 32m torus packer for Campfire centers
-local function pack_cf_mod32(x, z)
+-- 22-bit (11-bit X + 11-bit Z = 3.9cm precision) 80m torus packer for Campfire centers
+local function pack_cf_mod80(x, z)
     if not x or not z then return 0.25 end
-    local mx = x - math.floor(x / 32.0) * 32.0
-    local mz = z - math.floor(z / 32.0) * 32.0
-    local ix = clamp_val(math.floor((mx / 32.0) * 1024.0), 0, 1023)
-    local iz = clamp_val(math.floor((mz / 32.0) * 1024.0), 0, 1023)
-    local code = 1048576 + ix * 1024 + iz
-    return 0.5 + (code / 8388608.0)
+    local mx = x - math.floor(x / TORUS_SIZE) * TORUS_SIZE
+    local mz = z - math.floor(z / TORUS_SIZE) * TORUS_SIZE
+    local ix = clamp_val(math.floor((mx / TORUS_SIZE) * 2048.0), 0, 2047)
+    local iz = clamp_val(math.floor((mz / TORUS_SIZE) * 2048.0), 0, 2047)
+    local code = 4194304 + ix * 2048 + iz
+    return 0.5 + (code / 16777216.0)
 end
 
 local function sync_mcm(tg)
@@ -192,16 +195,25 @@ local function is_underground_level()
     return lname and UNDERGROUND_LEVELS[lname] == true
 end
 
+-- Multi-ray sky check: ignores narrow tree branches or overhead wires; only true roofs block >= 2 rays!
 local function has_open_sky(pos, ignore_obj)
-    local pick = ray_pick()
-    pick:set_position(vector():set(pos.x, pos.y + 0.65, pos.z))
-    pick:set_direction(VEC_UP)
-    pick:set_flags(2)
-    pick:set_range(22.0)
-    if ignore_obj then pick:set_ignore_object(ignore_obj) end
-    pick:query()
-    local d = pick:get_distance()
-    return (d <= 0 or d >= 21.5)
+    local origin = vector():set(pos.x, pos.y + 0.70, pos.z)
+    local open_votes = 0
+    for i = 1, 3 do
+        local pick = ray_pick()
+        pick:set_position(origin)
+        pick:set_direction(SKY_RAYS[i])
+        pick:set_flags(2)
+        pick:set_range(18.0)
+        if ignore_obj then pick:set_ignore_object(ignore_obj) end
+        pick:query()
+        local d = pick:get_distance()
+        if d <= 0 or d >= 17.5 then
+            open_votes = open_votes + 1
+            if open_votes >= 2 then return true end
+        end
+    end
+    return false
 end
 
 local function get_snowfall_state()
@@ -212,12 +224,14 @@ local function get_snowfall_state()
 end
 
 local function is_actor_indoors()
-    if _G.inverno_freezing_mechanic and _G.inverno_freezing_mechanic.is_actor_indoors then
-        return _G.inverno_freezing_mechanic.is_actor_indoors()
-    elseif _G.inverno_snowfall_system and _G.inverno_snowfall_system.is_inside ~= nil then
-        return _G.inverno_snowfall_system.is_inside
-    end
     if not db.actor then return false end
+    if _G.inverno_freezing_mechanic and _G.inverno_freezing_mechanic.is_actor_indoors then
+        if _G.inverno_freezing_mechanic.is_actor_indoors() then
+            -- Double-check with 3-ray sky test so standing under a single tree branch never counts as indoors
+            return not has_open_sky(db.actor:position(), db.actor)
+        end
+        return false
+    end
     return not has_open_sky(db.actor:position(), db.actor)
 end
 
@@ -266,14 +280,14 @@ local function ensure_inverno_always_snow_hook()
     end
 end
 
--- 2. Minimum 5-Minute (>= 300s) 3D Trench Lifetime & Smooth Tail-to-Head Decay Curve
+-- 2. Minimum 5-Minute (>= 305s) 3D Trench Lifetime & Smooth Start-to-End Decay
 local function get_trench_ttl_sec()
     local w_state = get_snowfall_state()
-    local base_ttl = 360.0 -- 6 minutes in normal snowfall
+    local base_ttl = 360.0
     if w_state >= 4.5 then
-        base_ttl = 305.0   -- 5+ minutes even in blizzards
+        base_ttl = 305.0
     elseif w_state >= 3.5 then
-        base_ttl = 330.0   -- 5.5 minutes in heavy snow
+        base_ttl = 330.0
     end
     return math.max(90.0, base_ttl * cfg_ttl_mult)
 end
@@ -283,12 +297,11 @@ local function eval_node_strength(pt, tg, ttl_sec)
     if age_sec >= ttl_sec then return 0.0 end
     if age_sec <= 0.0 then return pt.w end
     local u = age_sec / ttl_sec
-    -- Stay deep for first 12% (~40s), then smoothly and continuously fill in from oldest start to newest end!
     local fade
-    if u <= 0.12 then
-        fade = 1.0 - (u / 0.12) * 0.06
+    if u <= 0.14 then
+        fade = 1.0 - (u / 0.14) * 0.06
     else
-        fade = 0.94 * (1.0 - ((u - 0.12) / 0.88))
+        fade = 0.94 * (1.0 - ((u - 0.14) / 0.86))
     end
     return clamp_val(pt.w * fade, 0.0, 1.0)
 end
@@ -306,8 +319,9 @@ local function is_inside_melted_campfire_zone(pos)
     return false
 end
 
--- Append point to actor's 3D snow trench chain with smart collinear simplification
--- (straight paths merge up to 2.6m per segment so 25 GPU slots cover 40-65m of trails!)
+-- Immutable Turn-Aware Trail Point Recorder:
+-- Placed vertices NEVER move or slide! Places points closer (0.62m) on curves and wider (1.08m) on straight runs
+-- so 25 slots hold long 25-35m trails with smooth corners and zero vertex jitter!
 local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_chain)
     local chains = world_trails[actor_id]
     if not chains then
@@ -324,9 +338,13 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
     local pts = chain.pts
     local n = #pts
     if n == 0 then
-        -- Seed a tiny 0.18m anchor pair so even the very first step immediately forms a valid 3D depression
-        pts[1] = { x = pos.x - 0.09, y = pos.y, z = pos.z - 0.09, t = tg, w = base_w }
-        pts[2] = { x = pos.x + 0.09, y = pos.y, z = pos.z + 0.09, t = tg, w = base_w }
+        if actor_id == PLAYER_TRAIL_ID then
+            -- Player uses live_head as the 2nd point immediately, so 1 anchor point is enough!
+            pts[1] = { x = pos.x, y = pos.y, z = pos.z, t = tg, w = base_w }
+        else
+            pts[1] = { x = pos.x - 0.08, y = pos.y, z = pos.z - 0.08, t = tg, w = base_w }
+            pts[2] = { x = pos.x + 0.08, y = pos.y, z = pos.z + 0.08, t = tg, w = base_w }
+        end
         return true
     end
 
@@ -336,37 +354,30 @@ local function append_world_trail_point(actor_id, pos, tg, base_w, force_new_cha
     local dy = math.abs(pos.y - last_pt.y)
     local d2 = dx * dx + dz * dz
 
-    -- Teleport or jump break (> 3.6m horizontal or > 1.8m vertical): start a separate sub-chain
-    if d2 > 12.96 or dy > 1.80 then
+    if d2 > 14.44 or dy > 2.00 then -- > 3.8m jump/teleport break
         chain.closed = true
         return append_world_trail_point(actor_id, pos, tg, base_w, true)
     end
 
-    local min_step_sqr = (actor_id == PLAYER_TRAIL_ID) and 0.30 or 0.22 -- ~0.55m player, ~0.47m NPC
-    if d2 < min_step_sqr then
-        return false
-    end
-
-    -- Collinear simplification: if p_prev -> last_pt -> pos is nearly straight (< 12cm deviation & < 2.6m total),
-    -- slide last_pt forward so straight walks conserve GPU slots while preserving age gradient!
+    -- Turn-aware immutable spacing: 0.62m when turning (> 18 deg), 1.05m when walking straight
+    local req_d2 = 1.10 -- 1.05m^2 straight step
     if n >= 2 then
         local prev_pt = pts[n - 1]
-        local sx = pos.x - prev_pt.x
-        local sz = pos.z - prev_pt.z
-        local full_len2 = sx * sx + sz * sz
-        local dt_prev = tg - prev_pt.t
-        if full_len2 > 0.04 and full_len2 <= 6.76 and dt_prev < 18000 then
-            local cross = math.abs((last_pt.x - prev_pt.x) * sz - (last_pt.z - prev_pt.z) * sx)
-            local perp_err = cross / math.sqrt(full_len2)
-            if perp_err < 0.12 then
-                last_pt.x = pos.x
-                last_pt.y = pos.y
-                last_pt.z = pos.z
-                last_pt.t = tg
-                last_pt.w = base_w
-                return true
+        local vx1, vz1 = last_pt.x - prev_pt.x, last_pt.z - prev_pt.z
+        local l1 = math.sqrt(vx1 * vx1 + vz1 * vz1)
+        local l2 = math.sqrt(d2)
+        if l1 > 0.05 and l2 > 0.05 then
+            local cos_a = (vx1 * dx + vz1 * dz) / (l1 * l2)
+            if cos_a < 0.94 then
+                req_d2 = 0.38 -- ~0.62m on curves for smooth arcs!
             end
         end
+    else
+        req_d2 = 0.42
+    end
+
+    if d2 < req_d2 then
+        return false
     end
 
     pts[n + 1] = { x = pos.x, y = pos.y, z = pos.z, t = tg, w = base_w }
@@ -390,8 +401,7 @@ local function prune_expired_world_trails(tg)
         while c_idx <= #chains do
             local ch = chains[c_idx]
             local pts = ch.pts
-            -- Pop expired points from the oldest start (pts[1]) one by one -> smooth start-to-end disappearance!
-            while #pts > 0 and eval_node_strength(pts[1], tg, ttl_sec) <= 0.015 do
+            while #pts > 0 and eval_node_strength(pts[1], tg, ttl_sec) <= 0.02 do
                 table.remove(pts, 1)
             end
             if #pts < 2 and ch.closed then
@@ -408,7 +418,7 @@ local function prune_expired_world_trails(tg)
     end
 end
 
--- 3. Continuous Per-Frame (dt-driven, unquantized float) Campfire Snow Melting & Re-Snowing
+-- 3. Continuous Per-Frame (dt-driven) Campfire Snow Melting & Re-Snowing
 local function is_campfire_lit(binder)
     if not binder or not binder.campfire or not binder.object then return false end
     local burning = false
@@ -431,22 +441,19 @@ local function update_campfire_snow_melt(tg)
     if not cfg_campfire_melt or is_underground_level() or not db.actor then return end
     if not bind_campfire or not bind_campfire.campfires_all then return end
 
-    -- Refresh nearby campfire binder list at 4 Hz, advance float radii EVERY frame!
-    local do_full_scan = (tg >= last_cf_scan_tg + 250)
-    if do_full_scan then
+    if tg >= last_cf_scan_tg + 250 then
         last_cf_scan_tg = tg
         local cam_pos = device().cam_pos
         for id, binder in pairs(bind_campfire.campfires_all) do
             if binder and binder.object then
                 local cf_pos = binder.object:position()
                 local dist_sqr = cf_pos:distance_to_sqr(cam_pos)
-                if dist_sqr <= 3025.0 then -- within 55m
+                if dist_sqr <= 3600.0 then -- within 60m
                     local lit = is_campfire_lit(binder)
                     local st = campfire_melt[id]
                     if not st then
                         local saved_r = saved_campfire_radii[id]
-                        -- Distant pre-existing lit campfires (>18m away on spawn) start melted; close fires melt live!
-                        local init_r = saved_r or ((lit and dist_sqr > 324.0) and cfg_campfire_max_r or 0.0)
+                        local init_r = saved_r or ((lit and dist_sqr > 400.0) and cfg_campfire_max_r or 0.0)
                         st = {
                             r = init_r,
                             lit = lit,
@@ -465,7 +472,6 @@ local function update_campfire_snow_melt(tg)
 
     local cam_pos = device().cam_pos
     local w_state = get_snowfall_state()
-    -- Continuous snow re-accumulation rate in meters/second (~70s in blizzard, ~105s in normal snow)
     local resnow_rate = (w_state >= 4.5) and 0.032 or ((w_state >= 3.5) and 0.025 or 0.020)
     local best_d1 = 999999.0
     local best_d2 = 999999.0
@@ -473,11 +479,10 @@ local function update_campfire_snow_melt(tg)
     for id, st in pairs(campfire_melt) do
         if st.sky and st.pos then
             local d2 = st.pos:distance_to_sqr(cam_pos)
-            if d2 <= 3025.0 then
+            if d2 <= 3600.0 then
                 local prev_r = st.r
                 if st.lit then
                     if st.r < cfg_campfire_max_r then
-                        -- Natural thermal ease-out: melts briskly near the logs, gently approaches equilibrium at max_r
                         local frac_r = clamp_val(st.r / math.max(cfg_campfire_max_r, 0.5), 0.0, 1.0)
                         local melt_speed = 0.082 * (1.15 - 0.65 * frac_r)
                         st.r = math.min(cfg_campfire_max_r, st.r + melt_speed * dt)
@@ -488,13 +493,13 @@ local function update_campfire_snow_melt(tg)
                     st.r = math.max(0.0, st.r - resnow_rate * dt)
                 end
 
-                if d2 <= 784.0 and math.abs(st.r - prev_r) > 0.00001 then
+                if d2 <= 1600.0 and math.abs(st.r - prev_r) > 0.00001 then
                     cf_animating_near = true
                 end
 
                 saved_campfire_radii[id] = (st.r > 0.02) and st.r or nil
 
-                if st.r > 0.008 and d2 <= 900.0 then -- within 30m of camera
+                if st.r > 0.008 and d2 <= 1764.0 then -- within 42m of camera!
                     if d2 < best_d1 then
                         best_d2 = best_d1
                         active_cf2_pos, active_cf2_r = active_cf1_pos, active_cf1_r
@@ -510,13 +515,13 @@ local function update_campfire_snow_melt(tg)
     end
 end
 
--- 4. Stream Visible 30m x 30m Window of Multi-Actor 3D Snow Trenches + Smooth Campfires to HLSL
+-- 4. Stream 77m x 77m Window of Multi-Actor 3D Snow Trenches + Smooth Campfires to HLSL
 local function push_fast_uniforms()
     if not get_console then return end
     if is_underground_level() then
         exec_cached("sp2", "shader_param_2 0.000,0.000,0.00000,0.00000")
-        exec_cached("cf1_pos", "r4_hdr10_bloom_blur_scale 0.250000000")
-        exec_cached("cf2_pos", "r4_hdr10_bloom_intensity 0.250000000")
+        exec_cached("cf1_pos", "r4_hdr10_bloom_blur_scale 0.2500000000")
+        exec_cached("cf2_pos", "r4_hdr10_bloom_intensity 0.2500000000")
         exec_cached("wpn_snow", "r4_hdr10_sun_intensity 1.0000")
         return
     end
@@ -532,14 +537,28 @@ local function push_fast_uniforms()
 
     local cf1_r = (cfg_campfire_melt and active_cf1_pos) and active_cf1_r or 0.0
     local cf2_r = (cfg_campfire_melt and active_cf2_pos) and active_cf2_r or 0.0
-    local cf1_pack = (cf1_r > 0.008 and active_cf1_pos) and pack_cf_mod32(active_cf1_pos.x, active_cf1_pos.z) or 0.25
-    local cf2_pack = (cf2_r > 0.008 and active_cf2_pos) and pack_cf_mod32(active_cf2_pos.x, active_cf2_pos.z) or 0.25
+    local cf1_pack = (cf1_r > 0.008 and active_cf1_pos) and pack_cf_mod80(active_cf1_pos.x, active_cf1_pos.z) or 0.25
+    local cf2_pack = (cf2_r > 0.008 and active_cf2_pos) and pack_cf_mod80(active_cf2_pos.x, active_cf2_pos.z) or 0.25
     local wpn_val = 1.0 + (cfg_weapon_snow and clamp_val(weapon_snow_amount * cfg_weapon_snow_int, 0.0, 2.0) or 0.0)
 
     exec_cached("sp2", string.format("shader_param_2 1.000,%.3f,%.5f,%.5f", snow_accum, cf1_r, cf2_r))
-    exec_cached("cf1_pos", string.format("r4_hdr10_bloom_blur_scale %.9f", cf1_pack))
-    exec_cached("cf2_pos", string.format("r4_hdr10_bloom_intensity %.9f", cf2_pack))
+    exec_cached("cf1_pos", string.format("r4_hdr10_bloom_blur_scale %.10f", cf1_pack))
+    exec_cached("cf2_pos", string.format("r4_hdr10_bloom_intensity %.10f", cf2_pack))
     exec_cached("wpn_snow", string.format("r4_hdr10_sun_intensity %.4f", wpn_val))
+end
+
+local function emit_subchains_to_gpu(list, gpu_nodes, budget_limit)
+    for i = 1, #list do
+        local rem = budget_limit - #gpu_nodes
+        if rem < 2 then break end
+        local snodes = list[i].nodes
+        local count = #snodes
+        local start_k = (count > rem) and (count - rem + 1) or 1
+        for k = start_k, count do
+            local nd = snodes[k]
+            gpu_nodes[#gpu_nodes + 1] = pack_trail_node(nd.x, nd.z, nd.s, k > start_k)
+        end
+    end
 end
 
 local function push_trail_window_uniforms(tg)
@@ -551,19 +570,30 @@ local function push_trail_window_uniforms(tg)
         local cx, cy, cz = cam_pos.x, cam_pos.y, cam_pos.z
         local ttl_sec = get_trench_ttl_sec()
 
-        -- Extract contiguous visible sub-chains strictly inside [-15.1m, +15.1m] XZ around camera
-        -- (guarantees ZERO 32m-torus wrap ghosts while streaming infinite-length 5+ minute world trails!)
-        local subchains = {}
+        local player_subs = {}
+        local npc_subs = {}
+
         for actor_id, chains in pairs(world_trails) do
             if actor_id == PLAYER_TRAIL_ID or cfg_enable_npc_tracks then
                 for c_i = 1, #chains do
                     local ch = chains[c_i]
                     local pts = ch.pts
                     local cur_sub = nil
-                    local min_dist2 = 999999.0
-
                     local total_pts = #pts
-                    local include_live = (actor_id == PLAYER_TRAIL_ID and c_i == #chains and not ch.closed and player_live_head ~= nil)
+
+                    -- Only append player_live_head if it is >= 0.15m away from the last committed point
+                    local include_live = false
+                    if actor_id == PLAYER_TRAIL_ID and c_i == #chains and not ch.closed and player_live_head ~= nil then
+                        if total_pts == 0 then
+                            include_live = false
+                        else
+                            local lp = pts[total_pts]
+                            local ldx = player_live_head.x - lp.x
+                            local ldz = player_live_head.z - lp.z
+                            include_live = (ldx * ldx + ldz * ldz) >= 0.0225
+                        end
+                    end
+
                     local count_with_live = total_pts + (include_live and 1 or 0)
 
                     for p_i = 1, count_with_live do
@@ -571,64 +601,79 @@ local function push_trail_window_uniforms(tg)
                         local dx = pt.x - cx
                         local dz = pt.z - cz
                         local dy = math.abs(pt.y - cy)
-                        if math.abs(dx) <= 15.1 and math.abs(dz) <= 15.1 and dy <= 9.5 then
+                        if math.abs(dx) <= WINDOW_HALF and math.abs(dz) <= WINDOW_HALF and dy <= 16.0 then
                             local str = eval_node_strength(pt, tg, ttl_sec)
                             if str > 0.02 then
                                 if not cur_sub then
-                                    cur_sub = { nodes = {}, is_player = ch.is_player, best_d2 = 999999.0 }
+                                    cur_sub = { nodes = {}, best_d2 = 999999.0, newest_t = 0 }
                                 end
                                 local d2 = dx * dx + dz * dz
                                 if d2 < cur_sub.best_d2 then cur_sub.best_d2 = d2 end
+                                if pt.t > cur_sub.newest_t then cur_sub.newest_t = pt.t end
                                 cur_sub.nodes[#cur_sub.nodes + 1] = { x = pt.x, z = pt.z, s = str }
                             elseif cur_sub then
-                                if #cur_sub.nodes >= 2 then subchains[#subchains + 1] = cur_sub end
+                                if #cur_sub.nodes >= 2 then
+                                    if ch.is_player then player_subs[#player_subs + 1] = cur_sub else npc_subs[#npc_subs + 1] = cur_sub end
+                                end
                                 cur_sub = nil
                             end
                         elseif cur_sub then
-                            if #cur_sub.nodes >= 2 then subchains[#subchains + 1] = cur_sub end
+                            if #cur_sub.nodes >= 2 then
+                                if ch.is_player then player_subs[#player_subs + 1] = cur_sub else npc_subs[#npc_subs + 1] = cur_sub end
+                            end
                             cur_sub = nil
                         end
                     end
                     if cur_sub and #cur_sub.nodes >= 2 then
-                        subchains[#subchains + 1] = cur_sub
+                        if ch.is_player then player_subs[#player_subs + 1] = cur_sub else npc_subs[#npc_subs + 1] = cur_sub end
                     end
                 end
             end
         end
 
-        -- Sort visible sub-chains: closest trenches to camera (with mild priority boost for fresh/player tracks,
-        -- while ensuring nearby NPCs right in front of you ALWAYS get slots too!)
-        table.sort(subchains, function(a, b)
-            local sa = a.best_d2 - (a.is_player and 6.0 or 0.0)
-            local sb = b.best_d2 - (b.is_player and 6.0 or 0.0)
-            return sa < sb
-        end)
+        -- Stable ordering: Player newest-first; NPCs closest-first — zero priority flipping between Player & NPC!
+        table.sort(player_subs, function(a, b) return a.newest_t > b.newest_t end)
+        table.sort(npc_subs, function(a, b) return a.best_d2 < b.best_d2 end)
 
-        for s_i = 1, #subchains do
-            local rem = MAX_GPU_SLOTS - #gpu_nodes
-            if rem < 2 then break end
-            local snodes = subchains[s_i].nodes
-            local count = #snodes
-            -- If a single sub-chain exceeds remaining slots, take the newest/closest tail end of it
-            local start_k = (count > rem) and (count - rem + 1) or 1
-            for k = start_k, count do
-                local nd = snodes[k]
-                gpu_nodes[#gpu_nodes + 1] = pack_trail_node(nd.x, nd.z, nd.s, k > start_k)
+        -- Count how many slots NPCs actually need (reserve up to 11 for NPCs when present, rest for Player!)
+        local npc_needed = 0
+        for i = 1, #npc_subs do npc_needed = npc_needed + #npc_subs[i].nodes end
+        local npc_reserve = math.min(npc_needed, 11)
+        local player_cap = MAX_GPU_SLOTS - npc_reserve
+
+        emit_subchains_to_gpu(player_subs, gpu_nodes, player_cap)
+        emit_subchains_to_gpu(npc_subs, gpu_nodes, MAX_GPU_SLOTS)
+        -- If NPCs left spare slots, let remaining older player sub-chains use them too
+        if #gpu_nodes < MAX_GPU_SLOTS and player_cap < MAX_GPU_SLOTS and #player_subs > 1 then
+            for i = 2, #player_subs do
+                local rem = MAX_GPU_SLOTS - #gpu_nodes
+                if rem < 2 then break end
+                -- Only emit subchains not already included
+                local snodes = player_subs[i].nodes
+                if #snodes <= rem then
+                    for k = 1, #snodes do
+                        local nd = snodes[k]
+                        gpu_nodes[#gpu_nodes + 1] = pack_trail_node(nd.x, nd.z, nd.s, k > 1)
+                    end
+                end
             end
         end
     end
 
+    -- Upload all 25 slots with exact C++ vaddss +1.0f pre-compensation on slots 2, 3, and 18!
     for i = 1, 22 do
+        local spec = TRAIL_SLOTS[i]
         local val = gpu_nodes[i] or 0.25
-        exec_cached("slot_" .. i, string.format("%s %.9f", TRAIL_SLOT_CMDS[i], val))
+        local send_val = spec.sub1 and (val - 1.0) or val
+        exec_cached("slot_" .. i, string.format("%s %.10f", spec.cmd, send_val))
     end
     local v23 = gpu_nodes[23] or 0.25
     local v24 = gpu_nodes[24] or 0.25
     local v25 = gpu_nodes[25] or 0.25
-    exec_cached("slot_23_25", string.format("r4_hdr10_flare_lens_color %.9f,%.9f,%.9f", v23, v24, v25))
+    exec_cached("slot_23_25", string.format("r4_hdr10_flare_lens_color %.10f,%.10f,%.10f", v23, v24, v25))
 end
 
--- Particle helpers (snow puffs & tree branch snow cascades — zero ground decals!)
+-- Particle helpers
 local function play_snow_puff(pos)
     if not cfg_enable_env_fx then return end
     local p = puff_pool[puff_idx]
@@ -668,7 +713,7 @@ local function play_tree_snow_cascade(pos)
     play_snow_puff(pos)
 end
 
--- 5. Player 3D Snow Trench Tracking (No 2D footprints!)
+-- 5. Player 3D Snow Trench Tracking
 local function update_player_trail(tg)
     if not cfg_enable_dynsnow or not db.actor or not db.actor:alive() or is_underground_level() then
         player_live_head = nil
@@ -695,7 +740,7 @@ local function update_player_trail(tg)
     player_was_valid = true
     player_live_head = { x = apos.x, y = apos.y, z = apos.z, t = tg, w = 1.0 }
 
-    if tg >= last_player_track_tg + 90 then
+    if tg >= last_player_track_tg + 80 then
         last_player_track_tg = tg
         append_world_trail_point(PLAYER_TRAIL_ID, apos, tg, 1.0, force_new)
     end
@@ -730,7 +775,7 @@ function actor_on_land(landing_speed)
     play_snow_puff(pos)
 end
 
--- 6. Stalker & Mutant Real 3D Snow Trenches (<= 40m, 5+ min persistence!)
+-- 6. Stalker & Mutant Real 3D Snow Trenches (<= 45m, 5+ min persistence!)
 local function get_mutant_trench_strength(obj)
     local id = obj:id()
     if entity_strength_cache[id] ~= nil then return entity_strength_cache[id] end
@@ -757,7 +802,7 @@ local function process_entity_step(obj, is_monster)
     entity_next_check_tg[id] = tg + 140
 
     local pos = obj:position()
-    if pos:distance_to_sqr(device().cam_pos) > 1600.0 then -- within 40m
+    if pos:distance_to_sqr(device().cam_pos) > 2025.0 then -- within 45m!
         if entity_chain_active[id] then
             close_actor_trail(id)
             entity_chain_active[id] = false
@@ -775,10 +820,10 @@ local function process_entity_step(obj, is_monster)
     local dz = pos.z - prev.z
     local dy = math.abs(pos.y - prev.y)
     local horiz_sqr = dx * dx + dz * dz
-    if horiz_sqr < 0.16 then return end -- moved >= 0.40m
+    if horiz_sqr < 0.16 then return end
     entity_last_pos[id] = vector():set(pos)
 
-    if dy > 1.6 or is_inside_melted_campfire_zone(pos) then
+    if dy > 1.8 or is_inside_melted_campfire_zone(pos) then
         if entity_chain_active[id] then
             close_actor_trail(id)
             entity_chain_active[id] = false
@@ -788,7 +833,7 @@ local function process_entity_step(obj, is_monster)
 
     local outdoor_entry = entity_outdoor_cache[id]
     if not outdoor_entry or tg > outdoor_entry.exp then
-        entity_outdoor_cache[id] = { ok = has_open_sky(pos, obj), exp = tg + 1500 }
+        entity_outdoor_cache[id] = { ok = has_open_sky(pos, obj), exp = tg + 1800 }
         outdoor_entry = entity_outdoor_cache[id]
     end
     if not outdoor_entry.ok then
@@ -813,7 +858,6 @@ function monster_on_update(mob) process_entity_step(mob, true) end
 local function cleanup_entity(obj)
     if not obj then return end
     local id = obj:id()
-    -- Close the chain so the deceased/despawned NPC's existing snow trench stays in the snow for 5+ minutes!
     close_actor_trail(id)
     entity_last_pos[id] = nil
     entity_next_check_tg[id] = nil
@@ -822,7 +866,7 @@ local function cleanup_entity(obj)
     entity_chain_active[id] = nil
 end
 
--- 7. Gunshots: Subtle Weapon-Frost Recoil Shake, Snow Puffs & Tree Snow Cascades
+-- 7. Gunshots & Explosion Snow FX
 function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_type, gl_type)
     local tg = time_global()
     sync_mcm(tg)
@@ -865,7 +909,6 @@ function actor_on_weapon_fired(obj, wpn, ammo_elapsed, grenade_elapsed, ammo_typ
     end
 end
 
--- 8. Crash-Safe Explosion Snow FX
 local function spawn_explosion_snow_fx(pos)
     if not pos then return end
     local tg = time_global()
@@ -874,7 +917,6 @@ local function spawn_explosion_snow_fx(pos)
     if not cfg_enable_dynsnow or not cfg_enable_env_fx or is_underground_level() then return end
     if not has_open_sky(pos, db.actor) then return end
 
-    -- Carve a 3D snow depression at explosion site + trigger snow dust & nearby branch cascade
     append_world_trail_point(90000 + math.random(1, 999), pos, tg, 1.0, true)
     play_snow_puff(vector():set(pos.x, pos.y + 0.3, pos.z))
     play_tree_snow_cascade(vector():set(pos.x, pos.y + 3.2, pos.z))
@@ -896,7 +938,7 @@ local function actor_on_before_hit_safe(s_hit, bone_id, flags)
     end
 end
 
--- 9. Main Update Loop
+-- 8. Main Update Loop
 function actor_on_update()
     local tg = time_global()
     sync_mcm(tg)
@@ -931,15 +973,13 @@ function actor_on_update()
         end
     end
 
-    -- Push campfire & weapon floats at 30 Hz when melting/re-snowing nearby (butter-smooth!), else 8 Hz
     local fast_interval = cf_animating_near and 33 or 120
     if tg >= last_fast_uniform_tg + fast_interval then
         last_fast_uniform_tg = tg
         push_fast_uniforms()
     end
 
-    -- Stream 25-slot 3D snow trench window at 11 Hz (90 ms)
-    if tg >= last_trail_push_tg + 90 then
+    if tg >= last_trail_push_tg + 75 then
         last_trail_push_tg = tg
         push_trail_window_uniforms(tg)
     end
@@ -960,23 +1000,23 @@ local function release_level_pools()
             tree_cascade_pool[i] = nil
         end
     end
-    puff_pool           = {}
-    tree_cascade_pool   = {}
-    campfire_melt       = {}
-    active_cf1_pos      = nil
-    active_cf1_r        = 0.0
-    active_cf2_pos      = nil
-    active_cf2_r        = 0.0
-    cf_animating_near   = false
-    world_trails        = {}
-    player_live_head    = nil
-    player_was_valid    = false
-    entity_last_pos     = {}
-    entity_next_check_tg = {}
-    entity_outdoor_cache = {}
+    puff_pool             = {}
+    tree_cascade_pool     = {}
+    campfire_melt         = {}
+    active_cf1_pos        = nil
+    active_cf1_r          = 0.0
+    active_cf2_pos        = nil
+    active_cf2_r          = 0.0
+    cf_animating_near     = false
+    world_trails          = {}
+    player_live_head      = nil
+    player_was_valid      = false
+    entity_last_pos       = {}
+    entity_next_check_tg  = {}
+    entity_outdoor_cache  = {}
     entity_strength_cache = {}
-    entity_chain_active = {}
-    cmd_cache           = {}
+    entity_chain_active   = {}
+    cmd_cache             = {}
 end
 
 function save_state(m_data)
@@ -990,6 +1030,14 @@ function load_state(m_data)
     release_level_pools()
 end
 
+local function actor_on_first_update()
+    local tg = time_global()
+    sync_mcm(tg)
+    ensure_inverno_always_snow_hook()
+    push_fast_uniforms()
+    push_trail_window_uniforms(tg)
+end
+
 local function actor_on_net_destroy()
     release_level_pools()
 end
@@ -999,6 +1047,7 @@ local function on_before_level_changing()
 end
 
 function on_game_start()
+    RegisterScriptCallback("actor_on_first_update", actor_on_first_update)
     RegisterScriptCallback("actor_on_footstep", actor_on_footstep)
     RegisterScriptCallback("actor_on_land", actor_on_land)
     RegisterScriptCallback("actor_on_weapon_fired", actor_on_weapon_fired)

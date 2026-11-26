@@ -1,6 +1,6 @@
 /**
- * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.2 3D Deformation
- * @ Description: Terrain Shader - Standard/Bump (Deep Snow Blanket + 5-Min Multi-Actor Trenches + Smooth Campfire Melt)
+ * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.3 3D Deformation
+ * @ Description: Terrain Shader - Standard/Bump (Deep Snow Blanket + 42m Multi-Actor Trenches + Smooth Campfire Melt)
  */
 
 #include "check_screenspace.h"
@@ -102,7 +102,7 @@ f_deffer main(p_flat I)
 		float3 snow_local_n = normalize(float3(n_macro + n_medium + n_fine, 1.0f));
 		float3 snow_view_n = normalize(mul(float3x3(I.M1, I.M2, I.M3), snow_local_n));
 
-		[branch] if ((trench > 0.005f || berm > 0.005f || cf_slush > 0.01f) && I.position.z < 18.0f)
+		[branch] if ((trench > 0.004f || berm > 0.004f || cf_slush > 0.01f) && I.position.z < 42.0f)
 		{
 			float tx1, bx1, cm1, cs1, tz1, bz1, cm2, cs2;
 			dynsnow_eval_cached(ctx, wpos.xz + float2(0.06f, 0.0f), tx1, bx1, cm1, cs1);
