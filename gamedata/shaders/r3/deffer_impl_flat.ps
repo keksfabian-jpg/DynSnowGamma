@@ -61,7 +61,7 @@ f_deffer main(p_flat I)
 	mix *= float3(0.6f, 0.6f, 1.0f);
 	float3 N = mul(float3x3(I.M1, I.M2, I.M3), mix.xyz);
 
-	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+	float snow_accum = dynsnow_get_terrain_snow_accum();
 
 	float3 N1 = mul(float3x3(I.M1, I.M2, I.M3), float3(0, 0, 1));
 	float3 N2 = normalize(mul(m_inv_V, normalize(N1)));

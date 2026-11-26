@@ -11,7 +11,7 @@ v2p_flat _main(v_model I, float is_skinned_entity)
 	float3 Pe = mul(m_WV, I.P);
 	O.hpos = mul(m_WVP, I.P);
 	O.N = mul((float3x3)m_WV, (float3)I.N);
-	O.RDrops = float4(0.0f, 0.0f, 0.0f, is_skinned_entity);
+	O.RDrops = float4(0.25f, 0.50f, 0.75f, is_skinned_entity);
 
 #ifdef SSFX_TAA
 	O.vel_curr = O.hpos;

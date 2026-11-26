@@ -51,8 +51,12 @@ f_deffer main(p_flat I)
 # endif
 #endif
 
-	bool is_npc_or_mutant = (I.RDrops.w > 0.5f);
-	float snow_mult = dynsnow_get_model_snow_mult(is_npc_or_mutant);
+#ifdef USE_LM_HEMI
+	bool is_npc_or_mutant = false;
+#else
+	bool is_npc_or_mutant = (abs(I.RDrops.x - 0.25f) < 0.02f && I.RDrops.w > 0.5f);
+#endif
+	float snow_mult = (ssfx_is_underground > 0.5f) ? 0.0f : dynsnow_get_model_snow_mult(is_npc_or_mutant);
 	float snow_accum = saturate(shader_param_2.y);
 
 	[branch] if (snow_accum > 0.001f && snow_mult > 0.005f && G_ROOF_SNOW_STRENGTH > 0.001f)

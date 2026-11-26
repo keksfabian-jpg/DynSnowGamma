@@ -75,6 +75,27 @@ uniform float4 hdr10_parameters10;
 uniform float4 heatvision_params2;
 uniform float4 heatvision_params3;
 uniform float4 heatvision_params4;
+uniform float ssfx_is_underground;
+
+#define DYNSNOW_WORLD_HALF 1600.0f
+#define DYNSNOW_WORLD_SPAN 3200.0f
+
+// Returns 0.0f on all underground/indoor levels (Agroprom UG, X-18, X-16, X-10, X-8, Jupiter UG, Sarcophagus, Warlab, Poselok UG, etc.)
+// while providing instant 0.88f snow on outdoor frame 0 before Lua initializes shader_param_2.
+float dynsnow_get_terrain_snow_accum()
+{
+	if (ssfx_is_underground > 0.5f)
+		return 0.0f;
+	// Lua sets heatvision_params2.x in [0.50 .. 2.50]; when underground, Lua explicitly sends shader_param_2.xy = (0, 0)
+	bool lua_active = (heatvision_params2.x >= 0.45f && heatvision_params2.x <= 3.5f);
+	if (lua_active)
+	{
+		if (shader_param_2.x < 0.01f && shader_param_2.y < 0.01f)
+			return 0.0f;
+		return saturate(shader_param_2.y);
+	}
+	return max(saturate(shader_param_2.y), 0.88f);
+}
 
 struct DynSnowContext
 {
@@ -130,8 +151,8 @@ bool dynsnow_decode_one_fullmap_node(float f_coord, uint meta11, out float2 wpos
 	conn = ((meta11 >> 10u) & 1u) != 0u;
 
 	wpos_xz = float2(
-		-1024.0f + ((float)ix + 0.5f) * 0.125f,
-		-1024.0f + ((float)iz + 0.5f) * 0.125f
+		-DYNSNOW_WORLD_HALF + ((float)ix + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
+		-DYNSNOW_WORLD_HALF + ((float)iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
 	);
 	strength = (float)ist * (1.0f / 31.0f);
 	return true;
@@ -155,7 +176,7 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 		uint lo1 = (uint)floor((hdr10_parameters4.y - 0.5f) * 16777216.0f + 0.5f);
 		uint iz1 = lo1 & 65535u;
 		uint ix1 = ((lo1 >> 16u) & 127u) | ((m1 & 511u) << 7u);
-		cf1_wpos = float2(-1024.0f + ((float)ix1 + 0.5f) * (2048.0f / 65536.0f), -1024.0f + ((float)iz1 + 0.5f) * (2048.0f / 65536.0f));
+		cf1_wpos = float2(-DYNSNOW_WORLD_HALF + ((float)ix1 + 0.5f) * (DYNSNOW_WORLD_SPAN / 65536.0f), -DYNSNOW_WORLD_HALF + ((float)iz1 + 0.5f) * (DYNSNOW_WORLD_SPAN / 65536.0f));
 		cf1_ok = true;
 	}
 
@@ -164,7 +185,7 @@ bool dynsnow_unpack_fullmap_campfires(out float2 cf1_wpos, out bool cf1_ok, out 
 		uint lo2 = (uint)floor((hdr10_parameters4.z - 0.5f) * 16777216.0f + 0.5f);
 		uint iz2 = lo2 & 65535u;
 		uint ix2 = ((lo2 >> 16u) & 127u) | ((m2 & 511u) << 7u);
-		cf2_wpos = float2(-1024.0f + ((float)ix2 + 0.5f) * (2048.0f / 65536.0f), -1024.0f + ((float)iz2 + 0.5f) * (2048.0f / 65536.0f));
+		cf2_wpos = float2(-DYNSNOW_WORLD_HALF + ((float)ix2 + 0.5f) * (DYNSNOW_WORLD_SPAN / 65536.0f), -DYNSNOW_WORLD_HALF + ((float)iz2 + 0.5f) * (DYNSNOW_WORLD_SPAN / 65536.0f));
 		cf2_ok = true;
 	}
 

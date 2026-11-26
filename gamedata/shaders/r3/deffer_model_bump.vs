@@ -19,7 +19,7 @@ v2p_bumped _main(v_model I, float is_skinned_entity)
 	float3 Pe = mul(m_WV, w_pos);
 	O.tcdh = float4(tc.xyyy);
 	// Tag skinned characters (NPCs & Mutants = 1.0) vs rigid dynamic props/vehicles (= 0.0)
-	O.RDrops = float4(0.0f, 0.0f, 0.0f, is_skinned_entity);
+	O.RDrops = float4(0.25f, 0.50f, 0.75f, is_skinned_entity);
 	O.sss_extra = 0.0f;
 
 #ifdef SSFX_TAA

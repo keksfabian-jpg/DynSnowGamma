@@ -21,7 +21,14 @@ local UNDERGROUND_LEVELS = {
     ["l12u_sarcofag"]          = true,
     ["l12u_control_monolith"]  = true,
     ["l13u_warlab"]            = true,
+    ["poselok_ug"]             = true,
+    ["bunker_a1"]              = true,
+    ["collaider"]              = true,
 }
+
+local WORLD_HALF = 1600.0
+local WORLD_SPAN = 3200.0
+local level_is_changing = false
 
 local MUTANT_TRENCH_STRENGTH = {
     tushkan     = 0.42,
@@ -151,14 +158,14 @@ local function exec_cached(key, cmd_str)
     end
 end
 
--- Encode one 34-bit Full-Map World Node ([-1024m .. +1024m] at 12.5cm precision, 31 fade levels, 1 conn bit)
+-- Encode one 34-bit Full-Map World Node ([-1600m .. +1600m] = 3200m x 3200m at 19.5cm precision, 31 fade levels, 1 conn bit)
 -- into (f_coord23, meta11)
 local function encode_fullmap_node(nd)
     if not nd or not nd.x or not nd.z or nd.s <= 0.02 then
         return 0.25, 0
     end
-    local ix = clamp_val(math.floor(((nd.x + 1024.0) / 2048.0) * 16384.0), 0, 16383)
-    local iz = clamp_val(math.floor(((nd.z + 1024.0) / 2048.0) * 16384.0), 0, 16383)
+    local ix = clamp_val(math.floor(((nd.x + WORLD_HALF) / WORLD_SPAN) * 16384.0), 0, 16383)
+    local iz = clamp_val(math.floor(((nd.z + WORLD_HALF) / WORLD_SPAN) * 16384.0), 0, 16383)
     local ist = clamp_val(math.floor(nd.s * 31.0 + 0.5), 1, 31)
     local iconn = nd.conn and 1 or 0
 
@@ -169,22 +176,22 @@ local function encode_fullmap_node(nd)
     return (0.5 + c23 / 16777216.0), meta11
 end
 
--- Encode 2 Full-Map Campfires (16-bit X + 16-bit Z = 3.1cm precision across 2048m map!)
+-- Encode 2 Full-Map Campfires (16-bit X + 16-bit Z = 4.9cm precision across 3200m map!)
 local function encode_fullmap_campfires(p1, r1, p2, r2)
     local f_lo1, f_lo2 = 0.25, 0.25
     local m1, m2 = 0, 0
 
     if p1 and r1 > 0.008 then
-        local ix1 = clamp_val(math.floor(((p1.x + 1024.0) / 2048.0) * 65536.0), 0, 65535)
-        local iz1 = clamp_val(math.floor(((p1.z + 1024.0) / 2048.0) * 65536.0), 0, 65535)
+        local ix1 = clamp_val(math.floor(((p1.x + WORLD_HALF) / WORLD_SPAN) * 65536.0), 0, 65535)
+        local iz1 = clamp_val(math.floor(((p1.z + WORLD_HALF) / WORLD_SPAN) * 65536.0), 0, 65535)
         local lo1 = (ix1 % 128) * 65536 + iz1
         f_lo1 = 0.5 + lo1 / 16777216.0
         m1 = 512 + math.floor(ix1 / 128)
     end
 
     if p2 and r2 > 0.008 then
-        local ix2 = clamp_val(math.floor(((p2.x + 1024.0) / 2048.0) * 65536.0), 0, 65535)
-        local iz2 = clamp_val(math.floor(((p2.z + 1024.0) / 2048.0) * 65536.0), 0, 65535)
+        local ix2 = clamp_val(math.floor(((p2.x + WORLD_HALF) / WORLD_SPAN) * 65536.0), 0, 65535)
+        local iz2 = clamp_val(math.floor(((p2.z + WORLD_HALF) / WORLD_SPAN) * 65536.0), 0, 65535)
         local lo2 = (ix2 % 128) * 65536 + iz2
         f_lo2 = 0.5 + lo2 / 16777216.0
         m2 = 512 + math.floor(ix2 / 128)
@@ -215,11 +222,22 @@ local function sync_mcm(tg)
 end
 
 local function is_underground_level()
-    local lname = level.name()
-    return lname and UNDERGROUND_LEVELS[lname] == true
+    local lname = level.name and level.name() or nil
+    if lname and UNDERGROUND_LEVELS[string.lower(lname)] == true then
+        return true
+    end
+    local w = level.get_weather and level.get_weather() or nil
+    if w and string.find(string.lower(w), "indoor") then
+        return true
+    end
+    if level.outdoor and level.outdoor() == 0 then
+        return true
+    end
+    return false
 end
 
 local function has_open_sky(pos, ignore_obj)
+    if level_is_changing then return false end
     local origin = vector():set(pos.x, pos.y + 0.70, pos.z)
     local open_votes = 0
     for i = 1, 3 do
@@ -651,8 +669,8 @@ local function push_trail_fullmap_uniforms(tg)
 
                     for p_i = 1, count_with_live do
                         local pt = (p_i <= total_pts) and pts[p_i] or player_live_head
-                        -- Valid across the entire 2048m x 2048m map!
-                        if math.abs(pt.x) <= 1020.0 and math.abs(pt.z) <= 1020.0 then
+                        -- Valid across the entire 3200m x 3200m map (supports Darkscape, Trucks Cemetery, Swamps, Zaton, Jupiter, etc.)!
+                        if math.abs(pt.x) <= 1595.0 and math.abs(pt.z) <= 1595.0 then
                             local str = eval_node_strength(pt, tg, ttl_sec)
                             if str > 0.02 then
                                 cur_nodes[#cur_nodes + 1] = { x = pt.x, z = pt.z, s = str }
@@ -734,40 +752,44 @@ local function push_trail_fullmap_uniforms(tg)
     exec_cached("raw_30_33", string.format("heat_vision_args_2 %.10f,%.10f,%.10f,%.10f", raw[30], raw[31], raw[32], raw[33]))
 end
 
--- Particle helpers (safe on both Project INVERNO and standalone/vanilla Anomaly setups!)
+-- Particle helpers (safe across level transitions and on both Project INVERNO and standalone setups!)
 local function play_snow_puff(pos)
-    if not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
-    local p = puff_pool[puff_idx]
+    if level_is_changing or not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
+    local slot = puff_idx
+    local p = puff_pool[slot]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_dust") end)
-        if ok and obj then p = obj puff_pool[puff_idx] = p end
+        if ok and obj then p = obj puff_pool[slot] = p end
     end
     puff_idx = (puff_idx % MAX_PUFF_POOL) + 1
     if p then
         if p:playing() then p:stop() end
         p:play_at_pos(pos)
-        local stop_id = "dynsnow_puff_" .. tostring(puff_idx)
+        local stop_id = "dynsnow_puff_" .. tostring(slot)
         CreateTimeEvent("dynsnow_fx", stop_id, 0.55, function()
-            if p and p:playing() then p:stop() end
+            local cur_p = puff_pool[slot]
+            if cur_p and cur_p:playing() then cur_p:stop() end
             return true
         end)
     end
 end
 
 local function play_tree_snow_cascade(pos)
-    if not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
-    local p = tree_cascade_pool[tree_cascade_idx]
+    if level_is_changing or not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
+    local slot = tree_cascade_idx
+    local p = tree_cascade_pool[slot]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_heavy") end)
-        if ok and obj then p = obj tree_cascade_pool[tree_cascade_idx] = p end
+        if ok and obj then p = obj tree_cascade_pool[slot] = p end
     end
     tree_cascade_idx = (tree_cascade_idx % MAX_TREE_POOL) + 1
     if p then
         if p:playing() then p:stop() end
         p:play_at_pos(vector():set(pos.x, pos.y - 0.35, pos.z))
-        local stop_id = "dynsnow_tree_" .. tostring(tree_cascade_idx)
+        local stop_id = "dynsnow_tree_" .. tostring(slot)
         CreateTimeEvent("dynsnow_fx", stop_id, 1.75, function()
-            if p and p:playing() then p:stop() end
+            local cur_p = tree_cascade_pool[slot]
+            if cur_p and cur_p:playing() then cur_p:stop() end
             return true
         end)
     end
@@ -854,7 +876,7 @@ local function get_mutant_trench_strength(obj)
 end
 
 local function process_entity_step(obj, is_monster)
-    if not cfg_enable_dynsnow or not cfg_enable_npc_tracks or is_underground_level() then return end
+    if level_is_changing or not cfg_enable_dynsnow or not cfg_enable_npc_tracks or is_underground_level() then return end
     if not obj or not obj:alive() then return end
 
     local id = obj:id()
@@ -997,6 +1019,7 @@ end
 
 -- 8. Main Update Loop
 function actor_on_update()
+    if level_is_changing then return end
     local tg = time_global()
     sync_mcm(tg)
     ensure_inverno_always_snow_hook()
@@ -1044,16 +1067,30 @@ end
 
 local function release_level_pools()
     for i = 1, MAX_PUFF_POOL do
+        if RemoveTimeEvent then
+            pcall(RemoveTimeEvent, "dynsnow_fx", "dynsnow_puff_" .. tostring(i))
+        end
         local p = puff_pool[i]
         if p then
-            pcall(function() if p:playing() then p:stop() end end)
+            pcall(function()
+                if p:playing() then
+                    if p.stop_deffered then p:stop_deffered() else p:stop() end
+                end
+            end)
             puff_pool[i] = nil
         end
     end
     for i = 1, MAX_TREE_POOL do
+        if RemoveTimeEvent then
+            pcall(RemoveTimeEvent, "dynsnow_fx", "dynsnow_tree_" .. tostring(i))
+        end
         local p = tree_cascade_pool[i]
         if p then
-            pcall(function() if p:playing() then p:stop() end end)
+            pcall(function()
+                if p:playing() then
+                    if p.stop_deffered then p:stop_deffered() else p:stop() end
+                end
+            end)
             tree_cascade_pool[i] = nil
         end
     end
@@ -1088,6 +1125,7 @@ function load_state(m_data)
 end
 
 local function actor_on_first_update()
+    level_is_changing = false
     local tg = time_global()
     sync_mcm(tg)
     ensure_inverno_always_snow_hook()
@@ -1096,10 +1134,12 @@ local function actor_on_first_update()
 end
 
 local function actor_on_net_destroy()
+    level_is_changing = true
     release_level_pools()
 end
 
 local function on_before_level_changing()
+    level_is_changing = true
     release_level_pools()
 end
 

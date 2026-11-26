@@ -32,7 +32,7 @@ f_deffer main(p_flat I)
 	float3 N = normalize(I.N.xyz);
 	float snow_height_offset = 0.0f;
 
-	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+	float snow_accum = dynsnow_get_terrain_snow_accum();
 	[branch] if (snow_accum > 0.001f)
 	{
 		float3 world_N = normalize(mul(m_inv_V, N));

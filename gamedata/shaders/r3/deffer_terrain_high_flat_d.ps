@@ -194,7 +194,7 @@ f_deffer main(p_bumped I)
 
 #ifdef SSFX_PUDDLES
 	float freeze_f = saturate(shader_param_2.x);
-	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+	float snow_accum = dynsnow_get_terrain_snow_accum();
 
 	float height_str = saturate(TERRAIN_POM_PLANE - PixelHeight);
 	float puddles = saturate(height_str * 4.5f);

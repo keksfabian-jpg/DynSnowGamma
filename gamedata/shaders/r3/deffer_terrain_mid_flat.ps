@@ -64,7 +64,7 @@ f_deffer main(p_flat I)
 	D.rgb = lerp(2.0f * D.rgb * lod_texture, D.rgb, saturate(-2.4f + length(I.position) * 0.013f));
 
 	float snow_height_offset = 0.0f;
-	float snow_accum = max(saturate(shader_param_2.y), 0.85f);
+	float snow_accum = dynsnow_get_terrain_snow_accum();
 
 	[branch] if (snow_accum > 0.001f)
 	{
