@@ -29,6 +29,10 @@ Engineered with a single-pass per-pixel spatial prefilter (`DynSnowContext`) to 
 4. Delete `Anomaly\appdata\shaders_cache` once before launching so the DX11 shaders compile cleanly.
 5. Configure all features live in-game via **Options → MCM → `!DynSnow`**.
 
+### 🔧 Separate Compatibility Patch (Quark Engine / Standalone Anomaly without SSS 23)
+- **Standard G.A.M.M.A. users do NOT need this patch.**
+- If you are playing on **Quark Engine**, **Vanilla Anomaly**, or a custom modpack **without Screen Space Shaders 23** (and get a `CBlender_deffer_model::Compile` shader error on startup), install the separate patch archive [`patches/DynSnowGamma_Quark_NoSSS_Patch.zip`](patches/DynSnowGamma_Quark_NoSSS_Patch.zip) **below** `DynSnowGamma` in Mod Organizer 2 and clear `appdata\shaders_cache`.
+
 ---
 
 ## 🇩🇪 Kurzbeschreibung (Deutsch)
@@ -38,7 +42,7 @@ Engineered with a single-pass per-pixel spatial prefilter (`DynSnowContext`) to 
 - **5+ Minuten persistente 3D-Schneegräben** für Spieler sowie alle aktiven Stalker & Mutanten auf der gesamten Karte (schneien langsam von Anfang bis Ende wieder zu)
 - **Dezenter, kristalliner Raureif & feiner Schneestaub auf Waffen** im Stil von *Project: INVERNO*
 - **Komplett stufenloses, flüssiges Lagerfeuer-Schmelzen & Wieder-Zuschneien**
-- **100 % Dauer-Schneefall** im Freien + **Baum-Schneelawinen** bei Beschuss/Explosionen
+- **Separater Patch (`patches/DynSnowGamma_Quark_NoSSS_Patch.zip`)** für Spieler mit *Quark Engine* / ohne *Screen Space Shaders 23* (für normales G.A.M.M.A. nicht nötig)
 - Einstellbar im Spiel über **Optionen → MCM → `!DynSnow`**.
 
 ---

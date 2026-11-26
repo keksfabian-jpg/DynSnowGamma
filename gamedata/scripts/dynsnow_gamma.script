@@ -726,9 +726,9 @@ local function push_trail_fullmap_uniforms(tg)
     exec_cached("raw_30_33", string.format("heat_vision_args_2 %.10f,%.10f,%.10f,%.10f", raw[30], raw[31], raw[32], raw[33]))
 end
 
--- Particle helpers
+-- Particle helpers (safe on both Project INVERNO and standalone/vanilla Anomaly setups!)
 local function play_snow_puff(pos)
-    if not cfg_enable_env_fx then return end
+    if not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
     local p = puff_pool[puff_idx]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_dust") end)
@@ -747,7 +747,7 @@ local function play_snow_puff(pos)
 end
 
 local function play_tree_snow_cascade(pos)
-    if not cfg_enable_env_fx then return end
+    if not cfg_enable_env_fx or not _G.inverno_snowfall_system then return end
     local p = tree_cascade_pool[tree_cascade_idx]
     if not p then
         local ok, obj = pcall(function() return particles_object("inverno\\snow_heavy") end)

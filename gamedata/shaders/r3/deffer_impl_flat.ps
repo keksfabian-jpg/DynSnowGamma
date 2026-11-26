@@ -5,24 +5,28 @@
 
 #include "check_screenspace.h"
 #include "settings_screenspace_PUDDLES.h"
-#include "settings_screenspace_SSR.h"
+#ifdef SSFX_SSR
+	#include "settings_screenspace_SSR.h"
+#endif
 #include "common.h"
 
-#if defined(__has_include)
-	#if __has_include("screenspace_mvectors.h")
-		#include "screenspace_mvectors.h"
-		#define HAS_SSFX_MVECTORS
-	#endif
+#ifdef SSFX_TAA
+	#include "screenspace_mvectors.h"
+	#define HAS_SSFX_MVECTORS
 #endif
 
 #include "sload.h"
-#include "screenspace_common_ripples.h"
+#ifdef SSFX_PUDDLES
+	#include "screenspace_common_ripples.h"
+#endif
 #include "dynsnow_common.h"
 
+#ifdef SSFX_PUDDLES
 Texture2D s_puddles_normal;
 Texture2D s_puddles_perlin;
 Texture2D s_puddles_mask;
 Texture2D s_rainsplash;
+#endif
 
 #define USE_4_DETAIL
 
@@ -84,6 +88,7 @@ f_deffer main(p_flat I)
 		float snow_slope = saturate((N2.y - G_TERRAIN_SNOW_SLOPE) / (1.0f - G_TERRAIN_SNOW_SLOPE));
 		float snow_weight = saturate(snow_slope * snow_accum * G_TERRAIN_SNOW_STRENGTH);
 
+#ifdef SSFX_PUDDLES
 		float2 snow_tc = I.tcdbump * 1.15f;
 		float2 warp = s_puddles_normal.Sample(smp_base, snow_tc * 0.09f).xy * 0.30f;
 		float2 w_uv = snow_tc + warp;
@@ -91,6 +96,14 @@ f_deffer main(p_flat I)
 		float3 s_macro  = s_puddles_normal.Sample(smp_base, w_uv * 0.16f);
 		float3 s_medium = s_puddles_normal.Sample(smp_base, w_uv * 0.52f + float2(0.27f, 0.61f));
 		float3 s_fine   = s_puddles_normal.Sample(smp_base, snow_tc * 1.95f);
+#else
+		float pmac = dynsnow_noise2(wpos.xz * 0.45f);
+		float pmed = dynsnow_noise2(wpos.xz * 1.65f + 3.1f);
+		float pfin = dynsnow_noise2(wpos.xz * 6.20f + 7.4f);
+		float3 s_macro  = float3(0.5f, 0.5f, pmac);
+		float3 s_medium = float3(0.5f, 0.5f, pmed);
+		float3 s_fine   = float3(0.5f, 0.5f, pfin);
+#endif
 
 		float drift_h = saturate(0.48f + (s_macro.z * 0.50f + s_medium.z * 0.35f + s_fine.z * 0.15f) * 0.55f);
 		float snow_mask = smoothstep(0.05f, 0.28f, snow_weight * drift_h) * (1.0f - cf_melt);

@@ -23,6 +23,39 @@
 
 #ifndef G_PUDDLES_FROZEN
 uniform float4 shader_param_2;
+#define G_PUDDLES_FROZEN
+#endif
+
+// Safe fallback snow & ice constants when Project INVERNO is not installed or overwritten by Atmospherics/SSS MCM
+#ifndef G_TERRAIN_SNOW_STRENGTH
+#define G_TERRAIN_SNOW_STRENGTH 1.25f
+#endif
+#ifndef G_TERRAIN_SNOW_SLOPE
+#define G_TERRAIN_SNOW_SLOPE 0.38f
+#endif
+#ifndef G_TERRAIN_SNOW_COLOR
+#define G_TERRAIN_SNOW_COLOR float3(0.93f, 0.96f, 1.00f)
+#endif
+#ifndef G_TERRAIN_SNOW_GLOSS
+#define G_TERRAIN_SNOW_GLOSS 0.06f
+#endif
+#ifndef G_TERRAIN_SNOW_BUMP
+#define G_TERRAIN_SNOW_BUMP 2.15f
+#endif
+#ifndef G_PUDDLES_RIPPLES_SCALE
+#define G_PUDDLES_RIPPLES_SCALE 0.75f
+#endif
+#ifndef G_PUDDLES_CRACKS_INTENSITY
+#define G_PUDDLES_CRACKS_INTENSITY 0.80f
+#endif
+#ifndef G_PUDDLES_ICE_ROUGHNESS
+#define G_PUDDLES_ICE_ROUGHNESS 0.48f
+#endif
+#ifndef G_PUDDLES_TINT
+#define G_PUDDLES_TINT float3(0.74f, 0.83f, 0.94f)
+#endif
+#ifndef G_PUDDLES_REFLECTIVITY
+#define G_PUDDLES_REFLECTIVITY 0.28f
 #endif
 
 #ifndef HDR10_H_

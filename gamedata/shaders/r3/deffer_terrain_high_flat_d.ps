@@ -6,9 +6,13 @@
 #define USE_TDETAIL
 #include "common.h"
 #include "check_screenspace.h"
-#include "screenspace_mvectors.h"
+#ifdef SSFX_TAA
+	#include "screenspace_mvectors.h"
+#endif
 #include "settings_screenspace_PUDDLES.h"
-#include "screenspace_common_ripples.h"
+#ifdef SSFX_PUDDLES
+	#include "screenspace_common_ripples.h"
+#endif
 #include "settings_screenspace_TERRAIN.h"
 #include "dynsnow_common.h"
 
@@ -329,6 +333,8 @@ f_deffer main(p_bumped I)
 		float4(offset_pos, 0.95f),
 		float4(C.rgb, G)
 	);
+#ifdef SSFX_TAA
 	O.velocity = ssfx_mv_calc(I.vel_curr, I.vel_prev, 0, 0);
+#endif
 	return O;
 }
