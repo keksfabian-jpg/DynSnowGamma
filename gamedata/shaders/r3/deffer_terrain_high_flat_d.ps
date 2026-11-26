@@ -70,11 +70,16 @@ void ApplyWeights(inout surface Sr, inout surface Sg, inout surface Sb, inout su
 
 float SampleSnowVolumeHeight(DynSnowContext ctx, float2 uv, float2 wpos_xz, float road_reduce, float freeze_weight)
 {
+#ifdef SSFX_PUDDLES
 	float2 warp = s_puddles_normal.SampleLevel(smp_base, uv * 0.09f, 0).xy * 0.30f;
 	float2 w_uv = uv + warp;
 
 	float h_macro  = s_puddles_normal.SampleLevel(smp_base, w_uv * 0.16f, 0).z;
 	float h_medium = s_puddles_normal.SampleLevel(smp_base, w_uv * 0.52f + float2(0.27f, 0.61f), 0).z;
+#else
+	float h_macro  = dynsnow_noise2(wpos_xz * 0.45f);
+	float h_medium = dynsnow_noise2(wpos_xz * 1.65f + 3.1f);
+#endif
 
 	float blanket = saturate(0.52f + (h_macro * 0.58f + h_medium * 0.42f) * 0.56f) * road_reduce * freeze_weight;
 

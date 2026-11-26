@@ -1,6 +1,9 @@
 // [ SETTINGS ] (Project INVERNO + DynSnow Deep Volumetric Winter Preset)
 
-uniform float4 shader_param_2; // x = ground_freeze_factor, y = snow_accumulation, z = trail_node_0, w = cf_radius + weapon_snow
+#if !defined(USE_ACES) && !defined(DYNSNOW_SHADER_PARAM_2_DECLARED)
+uniform float4 shader_param_2;
+#define DYNSNOW_SHADER_PARAM_2_DECLARED
+#endif
 
 #define G_PUDDLES_ALLWAYS
 #define G_PUDDLES_ENABLED					1.0f

@@ -21,8 +21,11 @@
 #ifndef DYNSNOW_COMMON_H
 #define DYNSNOW_COMMON_H
 
-#ifndef G_PUDDLES_FROZEN
+#if !defined(USE_ACES) && !defined(DYNSNOW_SHADER_PARAM_2_DECLARED)
 uniform float4 shader_param_2;
+#define DYNSNOW_SHADER_PARAM_2_DECLARED
+#endif
+#ifndef G_PUDDLES_FROZEN
 #define G_PUDDLES_FROZEN
 #endif
 
@@ -72,6 +75,7 @@ uniform float4 hdr10_parameters9;
 uniform float4 hdr10_parameters10;
 #endif
 
+uniform float4 heatvision_params1;
 uniform float4 heatvision_params2;
 uniform float4 heatvision_params3;
 uniform float4 heatvision_params4;
@@ -196,7 +200,7 @@ float dynsnow_seg_dist(float2 p_w, float2 a_w, float2 b_w, out float along_t)
 {
 	float2 ba = b_w - a_w;
 	float len2 = dot(ba, ba);
-	if (len2 > 14400.0f) // Up to 120m resampled straight map segments supported!
+	if (len2 > 225.0f) // Segments are true walked segments (<= 15m), never shortcuts across walls!
 	{
 		float da = length(p_w - a_w);
 		float db = length(p_w - b_w);
@@ -220,6 +224,10 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 	ctx.cf_count = 0;
 	ctx.cf0_pos = 0.0f; ctx.cf0_r = 0.0f;
 	ctx.cf1_pos = 0.0f; ctx.cf1_r = 0.0f;
+
+	// Guard against uninitialized user.ltx defaults on frame 0 before Lua runs
+	if (heatvision_params2.x < 0.45f || heatvision_params2.x > 3.5f)
+		return;
 
 	// 1. Full-map campfires
 	float cf1_r = shader_param_2.z;
@@ -256,8 +264,8 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 		}
 	}
 
-	// 2. Unpack 11 full-map triplets (33 floats = 22 absolute world-space trail nodes across the entire 2km map!)
-	float raw[33] = {
+	// 2. Unpack 37-float Bit-Exact Hybrid Anchor + Delta Stream (up to 35 connected segments across 3.2km x 3.2km!)
+	float raw[37] = {
 		hdr10_parameters3.x, hdr10_parameters3.y, hdr10_parameters3.z,
 		hdr10_parameters3.w, hdr10_parameters5.x, hdr10_parameters5.y,
 		hdr10_parameters5.z, hdr10_parameters5.w, hdr10_parameters6.x,
@@ -266,77 +274,115 @@ void dynsnow_init_context(float2 wpos_xz, float dist_z, out DynSnowContext ctx)
 		hdr10_parameters8.y, hdr10_parameters8.z, hdr10_parameters8.w,
 		hdr10_parameters9.x, hdr10_parameters9.y, hdr10_parameters9.z,
 		hdr10_parameters9.w, hdr10_parameters10.x, hdr10_parameters10.y,
-		hdr10_parameters10.z, heatvision_params3.x, heatvision_params3.y,
-		heatvision_params3.z, heatvision_params3.w, heatvision_params4.x,
-		heatvision_params4.y, heatvision_params4.z, heatvision_params4.w
+		hdr10_parameters10.z, heatvision_params1.x, heatvision_params1.y,
+		heatvision_params1.z, heatvision_params1.w, heatvision_params3.x,
+		heatvision_params3.y, heatvision_params3.z, heatvision_params3.w,
+		heatvision_params4.x, heatvision_params4.y, heatvision_params4.z,
+		heatvision_params4.w
 	};
 
 	float search_r = 0.96f * ctx.width_boost;
 	float best_d0 = search_r;
 	float best_d1 = search_r;
+	int prev_ix = 0;
+	int prev_iz = 0;
 	float2 prev_pos = 0.0f;
 	float prev_w = 0.0f;
 	bool has_prev = false;
 
-	[loop] for (int t = 0; t < 11; ++t)
+	int idx = 0;
+	[loop] while (idx < 37)
 	{
-		float f0 = raw[t * 3 + 0];
-		float f1 = raw[t * 3 + 1];
-		float f2 = raw[t * 3 + 2];
+		float f = raw[idx];
+		if (f < 0.35f)
+			break; // End-of-stream marker (0.25f)
 
-		if (f2 < 0.35f)
-			break; // End of active node pairs
-		if (f2 < 0.49f || f2 >= 0.99999994f)
+		if (f >= 0.7499f && f < 0.82f)
 		{
-			has_prev = false;
-			continue;
-		}
+			// 1-float Delta Node (exact 19.5cm grid step relative to prev_ix, prev_iz)
+			idx += 1;
+			if (!has_prev)
+				continue;
 
-		uint mpair = (uint)floor((f2 - 0.5f) * 8388608.0f + 0.5f);
-		uint meta0 = mpair & 2047u;
-		uint meta1 = (mpair >> 11u) & 2047u;
-
-		[unroll] for (int sub = 0; sub < 2; ++sub)
-		{
-			float fc = (sub == 0) ? f0 : f1;
-			uint mt  = (sub == 0) ? meta0 : meta1;
-			float2 cur_pos;
-			float cur_w;
-			bool conn;
-			if (!dynsnow_decode_one_fullmap_node(fc, mt, cur_pos, cur_w, conn))
+			uint code = (uint)floor((f - 0.5f) * 8388608.0f + 0.5f);
+			uint payload = code - 2097152u;
+			int dz = (int)(payload & 127u) - 64;
+			int dx = (int)((payload >> 7u) & 127u) - 64;
+			uint ist = (payload >> 14u) & 31u;
+			if (ist == 0u)
 			{
 				has_prev = false;
+				continue;
 			}
-			else
+
+			int cur_ix = clamp(prev_ix + dx, 0, 16383);
+			int cur_iz = clamp(prev_iz + dz, 0, 16383);
+			float2 cur_pos = float2(
+				-DYNSNOW_WORLD_HALF + ((float)cur_ix + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
+				-DYNSNOW_WORLD_HALF + ((float)cur_iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
+			);
+			float cur_w = (float)ist * (1.0f / 31.0f);
+
+			float2 bb_min = min(prev_pos, cur_pos) - search_r;
+			float2 bb_max = max(prev_pos, cur_pos) + search_r;
+			if (wpos_xz.x >= bb_min.x && wpos_xz.x <= bb_max.x && wpos_xz.y >= bb_min.y && wpos_xz.y <= bb_max.y)
 			{
-				if (conn && has_prev)
+				float t_seg;
+				float d = dynsnow_seg_dist(wpos_xz, prev_pos, cur_pos, t_seg);
+				if (d < best_d0)
 				{
-					float2 bb_min = min(prev_pos, cur_pos) - search_r;
-					float2 bb_max = max(prev_pos, cur_pos) + search_r;
-					if (wpos_xz.x >= bb_min.x && wpos_xz.x <= bb_max.x && wpos_xz.y >= bb_min.y && wpos_xz.y <= bb_max.y)
-					{
-						float t_seg;
-						float d = dynsnow_seg_dist(wpos_xz, prev_pos, cur_pos, t_seg);
-						if (d < best_d0)
-						{
-							best_d1 = best_d0;
-							ctx.seg1_a = ctx.seg0_a; ctx.seg1_b = ctx.seg0_b; ctx.seg1_w = ctx.seg0_w;
-							best_d0 = d;
-							ctx.seg0_a = prev_pos; ctx.seg0_b = cur_pos; ctx.seg0_w = float2(prev_w, cur_w);
-							ctx.seg_count = min(ctx.seg_count + 1, 2);
-						}
-						else if (d < best_d1)
-						{
-							best_d1 = d;
-							ctx.seg1_a = prev_pos; ctx.seg1_b = cur_pos; ctx.seg1_w = float2(prev_w, cur_w);
-							ctx.seg_count = 2;
-						}
-					}
+					best_d1 = best_d0;
+					ctx.seg1_a = ctx.seg0_a; ctx.seg1_b = ctx.seg0_b; ctx.seg1_w = ctx.seg0_w;
+					best_d0 = d;
+					ctx.seg0_a = prev_pos; ctx.seg0_b = cur_pos; ctx.seg0_w = float2(prev_w, cur_w);
+					ctx.seg_count = min(ctx.seg_count + 1, 2);
 				}
-				prev_pos = cur_pos;
-				prev_w = cur_w;
-				has_prev = true;
+				else if (d < best_d1)
+				{
+					best_d1 = d;
+					ctx.seg1_a = prev_pos; ctx.seg1_b = cur_pos; ctx.seg1_w = float2(prev_w, cur_w);
+					ctx.seg_count = 2;
+				}
 			}
+
+			prev_ix = cur_ix;
+			prev_iz = cur_iz;
+			prev_pos = cur_pos;
+			prev_w = cur_w;
+		}
+		else if (f >= 0.49f && f < 0.7499f && (idx + 1) < 37)
+		{
+			// 2-float Anchor Node (starts a new chain at exact 14-bit world ix, iz)
+			float f1 = raw[idx + 1];
+			idx += 2;
+			if (f1 < 0.49f || f1 >= 0.7499f)
+			{
+				has_prev = false;
+				continue;
+			}
+			uint code0 = (uint)floor((f  - 0.5f) * 8388608.0f + 0.5f);
+			uint code1 = (uint)floor((f1 - 0.5f) * 8388608.0f + 0.5f);
+			uint iz = code0 & 16383u;
+			uint ix = ((code0 >> 14u) & 127u) | ((code1 & 127u) << 7u);
+			uint ist = (code1 >> 7u) & 31u;
+			if (ist == 0u)
+			{
+				has_prev = false;
+				continue;
+			}
+			prev_ix = (int)ix;
+			prev_iz = (int)iz;
+			prev_pos = float2(
+				-DYNSNOW_WORLD_HALF + ((float)ix + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f),
+				-DYNSNOW_WORLD_HALF + ((float)iz + 0.5f) * (DYNSNOW_WORLD_SPAN / 16384.0f)
+			);
+			prev_w = (float)ist * (1.0f / 31.0f);
+			has_prev = true;
+		}
+		else
+		{
+			has_prev = false;
+			idx += 1;
 		}
 	}
 
