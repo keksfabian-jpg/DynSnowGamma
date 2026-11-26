@@ -1,6 +1,6 @@
 /**
- * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.3 3D Deformation
- * @ Description: Terrain Shader - Standard/Bump (Deep Snow Blanket + 42m Multi-Actor Trenches + Smooth Campfire Melt)
+ * @ Version: SCREEN SPACE SHADERS 23.5 + Project INVERNO + DynSnow v1.4 Full-Map Edition
+ * @ Description: Terrain Shader - Standard/Bump (Full-Map Unlimited Distance 3D Trenches + Campfire Melt)
  */
 
 #include "check_screenspace.h"
@@ -102,11 +102,12 @@ f_deffer main(p_flat I)
 		float3 snow_local_n = normalize(float3(n_macro + n_medium + n_fine, 1.0f));
 		float3 snow_view_n = normalize(mul(float3x3(I.M1, I.M2, I.M3), snow_local_n));
 
-		[branch] if ((trench > 0.004f || berm > 0.004f || cf_slush > 0.01f) && I.position.z < 42.0f)
+		[branch] if (trench > 0.004f || berm > 0.004f || cf_slush > 0.01f)
 		{
+			float eps = 0.06f * ctx.width_boost;
 			float tx1, bx1, cm1, cs1, tz1, bz1, cm2, cs2;
-			dynsnow_eval_cached(ctx, wpos.xz + float2(0.06f, 0.0f), tx1, bx1, cm1, cs1);
-			dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, 0.06f), tz1, bz1, cm2, cs2);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(eps, 0.0f), tx1, bx1, cm1, cs1);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, eps), tz1, bz1, cm2, cs2);
 			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
 			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
 			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);

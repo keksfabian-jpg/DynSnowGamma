@@ -1,6 +1,6 @@
 /**
- * @ Version: SCREEN SPACE SHADERS 23.5 + DynSnow v1.3 Seamless Mid-Range Snow Trenches & Campfire Melt
- * @ Description: Terrain Shader - MID (Extends 3D Snow Trenches, Berms & Campfire Melt cleanly to 42m!)
+ * @ Version: SCREEN SPACE SHADERS 23.5 + DynSnow v1.4 Full-Map Edition
+ * @ Description: Terrain Shader - MID (Unlimited Distance 3D Snow Trenches, Berms & Campfire Melt)
  */
 
 #include "common.h"
@@ -73,39 +73,38 @@ f_deffer main(p_flat I)
 		float terrain_patch = saturate(0.32f + snow_noise * 0.78f);
 		float snow_mask = smoothstep(0.06f, 0.30f, snow_weight * terrain_patch);
 
+		float3 wpos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
+		DynSnowContext ctx;
+		dynsnow_init_context(wpos.xz, I.position.z, ctx);
+
 		float trench = 0.0f, berm = 0.0f, cf_melt = 0.0f, cf_slush = 0.0f;
-		[branch] if (I.position.z < 42.0f)
+		dynsnow_eval_cached(ctx, wpos.xz, trench, berm, cf_melt, cf_slush);
+
+		snow_mask *= (1.0f - cf_melt);
+
+		[branch] if (trench > 0.004f || berm > 0.004f || cf_slush > 0.01f)
 		{
-			float3 wpos = mul(m_inv_V, float4(I.position.xyz, 1.0f)).xyz;
-			DynSnowContext ctx;
-			dynsnow_init_context(wpos.xz, I.position.z, ctx);
-			dynsnow_eval_cached(ctx, wpos.xz, trench, berm, cf_melt, cf_slush);
-
-			snow_mask *= (1.0f - cf_melt);
-
-			[branch] if (trench > 0.004f || berm > 0.004f || cf_slush > 0.01f)
-			{
-				float tx1, bx1, cm1, cs1, tz1, bz1, cm2, cs2;
-				dynsnow_eval_cached(ctx, wpos.xz + float2(0.08f, 0.0f), tx1, bx1, cm1, cs1);
-				dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, 0.08f), tz1, bz1, cm2, cs2);
-				float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
-				float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
-				float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
-				float3 trench_view_n = normalize(mul((float3x3)m_V, normalize(float3((h0 - hx) * 3.4f, 1.0f, (h0 - hz) * 3.4f))));
-				N = normalize(lerp(N, trench_view_n, snow_mask * saturate(trench * 0.85f + berm * 0.80f + cf_slush * 0.65f)));
-			}
+			float eps = 0.07f * ctx.width_boost;
+			float tx1, bx1, cm1, cs1, tz1, bz1, cm2, cs2;
+			dynsnow_eval_cached(ctx, wpos.xz + float2(eps, 0.0f), tx1, bx1, cm1, cs1);
+			dynsnow_eval_cached(ctx, wpos.xz + float2(0.0f, eps), tz1, bz1, cm2, cs2);
+			float h0 = (1.0f - trench * 0.92f + berm * 0.28f) * (1.0f - cf_melt);
+			float hx = (1.0f - tx1 * 0.92f + bx1 * 0.28f) * (1.0f - cm1);
+			float hz = (1.0f - tz1 * 0.92f + bz1 * 0.28f) * (1.0f - cm2);
+			float3 trench_view_n = normalize(mul((float3x3)m_V, normalize(float3((h0 - hx) * 3.8f, 1.0f, (h0 - hz) * 3.8f))));
+			N = normalize(lerp(N, trench_view_n, snow_mask * saturate(trench * 0.88f + berm * 0.85f + cf_slush * 0.65f)));
 		}
 
 		float frost_soil = saturate(1.0f - snow_mask) * snow_accum * 0.35f;
 		D.rgb *= lerp(1.0f, 0.78f, frost_soil);
 
-		float snow_ao = smoothstep(0.18f, 0.85f, snow_noise) * (1.0f - trench * 0.75f) + berm * 0.18f;
-		float3 snow_shaded_color = lerp(float3(0.58f, 0.70f, 0.88f), G_TERRAIN_SNOW_COLOR, saturate(snow_ao));
-		float3 compressed_bottom = lerp(float3(0.36f, 0.46f, 0.62f), D.rgb * 0.45f, smoothstep(0.65f, 0.98f, trench));
-		snow_shaded_color = lerp(snow_shaded_color, compressed_bottom, saturate(trench * 0.88f));
+		float snow_ao = smoothstep(0.18f, 0.85f, snow_noise) * (1.0f - trench * 0.78f) + berm * 0.22f;
+		float3 snow_shaded_color = lerp(float3(0.55f, 0.68f, 0.87f), G_TERRAIN_SNOW_COLOR, saturate(snow_ao));
+		float3 compressed_bottom = lerp(float3(0.34f, 0.45f, 0.62f), D.rgb * 0.45f, smoothstep(0.65f, 0.98f, trench));
+		snow_shaded_color = lerp(snow_shaded_color, compressed_bottom, saturate(trench * 0.90f));
 
 		D.rgb = lerp(D.rgb, snow_shaded_color, snow_mask);
-		G = lerp(G, G_TERRAIN_SNOW_GLOSS + trench * 0.12f, snow_mask);
+		G = lerp(G, G_TERRAIN_SNOW_GLOSS + trench * 0.14f, snow_mask);
 
 		[branch] if (cf_melt > 0.002f || cf_slush > 0.002f)
 		{
